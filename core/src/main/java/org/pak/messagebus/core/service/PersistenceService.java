@@ -1,4 +1,4 @@
-package org.pak.messagebus.core;
+package org.pak.messagebus.core.service;
 
 import java.sql.ResultSet;
 import java.util.List;

@@ -3,6 +3,8 @@ package org.pak.messagebus.core;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import lombok.extern.slf4j.Slf4j;
 import org.pak.messagebus.core.error.ExceptionClassifier;
+import org.pak.messagebus.core.service.QueryService;
+import org.pak.messagebus.core.service.TransactionService;
 
 import java.util.List;
 import java.util.concurrent.ExecutorService;
@@ -15,16 +17,16 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 @Slf4j
 class MessageProcessorStarter<T extends Message> {
     private final ExecutorService fixedThreadPoolExecutor;
-    private final QueryService<T> persistenceSubscriptionService;
+    private final QueryService queryService;
     private final TransactionService transactionService;
-    private ExceptionClassifier exceptionClassifier;
+    private final ExceptionClassifier exceptionClassifier;
     private final SubscriberConfig<T> subscriberConfig;
     private List<MessageProcessor<T>> messageProcessors;
     private final AtomicBoolean isRunning = new AtomicBoolean(false);
 
     MessageProcessorStarter(
             SubscriberConfig<T> subscriberConfig,
-            QueryService<T> persistenceSubscriptionService,
+            QueryService queryService,
             TransactionService transactionService,
             ExceptionClassifier exceptionClassifier
     ) {
@@ -38,15 +40,15 @@ class MessageProcessorStarter<T extends Message> {
                         })
                         .build()
                         .newThread(r));
-        this.persistenceSubscriptionService = persistenceSubscriptionService;
+        this.queryService = queryService;
         this.transactionService = transactionService;
         this.exceptionClassifier = exceptionClassifier;
     }
 
     public void start() {
         if (isRunning.compareAndSet(false, true)) {
-            persistenceSubscriptionService.initMessageTable();
-            persistenceSubscriptionService.initSubscriptionTable();
+            queryService.initMessageTable(subscriberConfig.getMessageType());
+            queryService.initSubscriptionTable(subscriberConfig.getMessageType(), subscriberConfig.getSubscriptionType());
 
             messageProcessors = IntStream.range(0, subscriberConfig.getConcurrency()).boxed()
                     .map(i -> {
@@ -57,7 +59,7 @@ class MessageProcessorStarter<T extends Message> {
                                 subscriberConfig.getRetryablePolicy(),
                                 subscriberConfig.getBlockingPolicy(),
                                 exceptionClassifier,
-                                persistenceSubscriptionService,
+                                queryService,
                                 transactionService,
                                 subscriberConfig.getTraceIdExtractor(),
                                 subscriberConfig.getMaxPollRecords());

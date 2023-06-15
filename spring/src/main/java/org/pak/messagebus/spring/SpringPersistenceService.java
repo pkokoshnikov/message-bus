@@ -1,6 +1,6 @@
 package org.pak.messagebus.spring;
 
-import org.pak.messagebus.core.PersistenceService;
+import org.pak.messagebus.core.service.PersistenceService;
 import org.springframework.jdbc.core.ArgumentPreparedStatementSetter;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.PreparedStatementCallback;
@@ -35,10 +35,9 @@ public class SpringPersistenceService implements PersistenceService {
     }
 
     public Object insert(String query, Object... args) {
-        var argumentSetter = new ArgumentPreparedStatementSetter(args);
-        var id = jdbcTemplate.execute((PreparedStatementCreator) con -> con.prepareStatement(query, new String[]{"id"}),
+        return jdbcTemplate.execute((PreparedStatementCreator) con -> con.prepareStatement(query, new String[]{"id"}),
                 ps -> {
-                    argumentSetter.setValues(ps);
+                    new ArgumentPreparedStatementSetter(args).setValues(ps);
                     ps.executeUpdate();
                     ResultSet keys = ps.getGeneratedKeys();
                     try {
@@ -47,10 +46,7 @@ public class SpringPersistenceService implements PersistenceService {
                     } finally {
                         JdbcUtils.closeResultSet(keys);
                     }
-
                 });
-
-        return id;
     }
 
     @Override

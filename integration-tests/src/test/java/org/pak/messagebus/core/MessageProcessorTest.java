@@ -30,18 +30,18 @@ import static java.util.Optional.ofNullable;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.pak.messagebus.core.Status.FAILED;
 import static org.pak.messagebus.core.Status.PROCESSED;
-import static org.pak.messagebus.core.TestMessage.MESSAGE_TYPE;
 
 @Testcontainers
 @Slf4j
 class MessageProcessorTest {
     static SubscriptionType<TestMessage> TEST_SUBSCRIPTION_TYPE =
-            new SubscriptionType<>("test-subscription", MESSAGE_TYPE);
+            new SubscriptionType<>("test-subscription", TestMessage.MESSAGE_TYPE);
     static SchemaName TEST_SCHEMA = new SchemaName("public");
     static String TEST_VALUE = "test-value";
     static String TEST_EXCEPTION_MESSAGE = "test-exception-message";
     MessagePublisher<TestMessage> messagePublisher;
-    PgQueryService<TestMessage> persistenceMessageService;
+    PgQueryService pgQueryService;
+    StringFormatter formatter = new StringFormatter();
 
     @Container
     PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>(DockerImageName.parse("postgres:15.1"));
@@ -60,24 +60,17 @@ class MessageProcessorTest {
 
         jdbcTemplate = new JdbcTemplate(dataSource);
         jsonbConverter = new JsonbConverter();
-        jsonbConverter.registerType(MESSAGE_TYPE.name(), MESSAGE_TYPE.messageClass());
+        jsonbConverter.registerType(TestMessage.MESSAGE_TYPE.name(), TestMessage.MESSAGE_TYPE.messageClass());
 
         transactionProvider =
                 new SpringTransactionService(new TransactionTemplate(new JdbcTransactionManager(dataSource) {}));
-        persistenceMessageService =
-                new PgQueryService<>(
-                        new SpringPersistenceService(
-                                jdbcTemplate),
-                        TEST_SCHEMA,
-                        MESSAGE_TYPE,
-                        TEST_SUBSCRIPTION_TYPE,
-                        jsonbConverter);
+        pgQueryService = new PgQueryService(new SpringPersistenceService(jdbcTemplate), TEST_SCHEMA, jsonbConverter);
 
         messagePublisher =
-                new MessagePublisher<>(MESSAGE_TYPE, TestMessage::getName, persistenceMessageService);
+                new MessagePublisher<>(TestMessage.MESSAGE_TYPE, TestMessage::getName, pgQueryService);
 
-        persistenceMessageService.initMessageTable();
-        persistenceMessageService.initSubscriptionTable();
+        pgQueryService.initMessageTable(TestMessage.MESSAGE_TYPE);
+        pgQueryService.initSubscriptionTable(TestMessage.MESSAGE_TYPE, TEST_SUBSCRIPTION_TYPE);
     }
 
     @Test
@@ -85,12 +78,12 @@ class MessageProcessorTest {
         TestMessage testMessage = new TestMessage(TEST_VALUE);
         new MessageProcessor<>(
                 message -> log.info("Handle message: {}", message),
-                MESSAGE_TYPE,
+                TestMessage.MESSAGE_TYPE,
                 TEST_SUBSCRIPTION_TYPE,
                 (e, attempt) -> null,
                 exception -> null,
                 testExceptionClassifier,
-                persistenceMessageService,
+                pgQueryService,
                 transactionProvider,
                 object -> "",
                 maxPollRecords);
@@ -112,12 +105,12 @@ class MessageProcessorTest {
     void testSuccessHandle() {
         var messageProcessor = new MessageProcessor<>(
                 testMessage -> log.info("Handle testMessage: {}", testMessage),
-                MESSAGE_TYPE,
+                TestMessage.MESSAGE_TYPE,
                 TEST_SUBSCRIPTION_TYPE,
                 (e, attempt) -> null,
                 exception -> null,
                 testExceptionClassifier,
-                persistenceMessageService,
+                pgQueryService,
                 transactionProvider,
                 object -> "",
                 maxPollRecords);
@@ -147,12 +140,12 @@ class MessageProcessorTest {
                 testMessage -> {
                     throw new NonRetryableApplicationException(TEST_EXCEPTION_MESSAGE);
                 },
-                MESSAGE_TYPE,
+                TestMessage.MESSAGE_TYPE,
                 TEST_SUBSCRIPTION_TYPE,
                 (e, attempt) -> null,
                 exception -> null,
                 testExceptionClassifier,
-                persistenceMessageService,
+                pgQueryService,
                 transactionProvider,
                 object -> "",
                 maxPollRecords);
@@ -175,12 +168,12 @@ class MessageProcessorTest {
                 testMessage -> {
                     throw new RetryableApplicationException(TEST_EXCEPTION_MESSAGE);
                 },
-                MESSAGE_TYPE,
+                TestMessage.MESSAGE_TYPE,
                 TEST_SUBSCRIPTION_TYPE,
                 (e, attempt) -> Duration.ofSeconds(600),
                 exception -> null,
                 testExceptionClassifier,
-                persistenceMessageService,
+                pgQueryService,
                 transactionProvider,
                 object -> "",
                 maxPollRecords);
@@ -220,12 +213,12 @@ class MessageProcessorTest {
                 testMessage -> {
                     throw new RetryableApplicationException(TEST_EXCEPTION_MESSAGE);
                 },
-                MESSAGE_TYPE,
+                TestMessage.MESSAGE_TYPE,
                 TEST_SUBSCRIPTION_TYPE,
                 (e, attempt) -> Duration.ofSeconds(0),
                 exception -> null,
                 testExceptionClassifier,
-                persistenceMessageService,
+                pgQueryService,
                 transactionProvider,
                 object -> "",
                 maxPollRecords);
@@ -261,7 +254,7 @@ class MessageProcessorTest {
                 testMessage -> {
                     throw new RetryableApplicationException(TEST_EXCEPTION_MESSAGE);
                 },
-                MESSAGE_TYPE,
+                TestMessage.MESSAGE_TYPE,
                 TEST_SUBSCRIPTION_TYPE,
                 (e, attempt) -> {
                     if (attempt == 0) {
@@ -272,7 +265,7 @@ class MessageProcessorTest {
                 },
                 exception -> null,
                 testExceptionClassifier,
-                persistenceMessageService,
+                pgQueryService,
                 transactionProvider,
                 object -> "",
                 maxPollRecords);
@@ -307,13 +300,13 @@ class MessageProcessorTest {
                 testMessage -> {
                     throw new BlockingApplicationException(TEST_EXCEPTION_MESSAGE);
                 },
-                MESSAGE_TYPE,
+                TestMessage.MESSAGE_TYPE,
                 TEST_SUBSCRIPTION_TYPE,
                 (e, attempt) -> null,
                 exception -> null,
                 exception -> BlockingApplicationException.class.isAssignableFrom(exception.getClass())
                         ? ExceptionType.BLOCKING : ExceptionType.RETRYABLE,
-                persistenceMessageService,
+                pgQueryService,
                 transactionProvider,
                 object -> "",
                 maxPollRecords);
@@ -339,14 +332,13 @@ class MessageProcessorTest {
                 message -> {
                     throw new BlockingApplicationException(TEST_EXCEPTION_MESSAGE);
                 },
-                MESSAGE_TYPE,
+                TestMessage.MESSAGE_TYPE,
                 TEST_SUBSCRIPTION_TYPE,
                 (e, attempt) -> null,
                 new SimpleBlockingPolicy(),
                 testExceptionClassifier,
-                persistenceMessageService,
+                pgQueryService,
                 transactionProvider,
-
                 object -> "",
                 maxPollRecords);
 
@@ -377,7 +369,7 @@ class MessageProcessorTest {
     }
 
     List<MessageContainer<TestMessage>> selectTestMessages() {
-        var query = Utils.format("""
+        var query = formatter.execute("""
                         SELECT s.id, s.message_id, s.attempt, s.error_message, s.stack_trace, s.created_at, s.updated_at,
                             s.execute_after, e.payload
                         FROM ${schema}.${subscriptionTable} s JOIN ${schema}.${messageTable} e ON s.message_id = e.id""",
@@ -402,7 +394,7 @@ class MessageProcessorTest {
     }
 
     List<MessageHistoryContainer<TestMessage>> selectTestMessagesFromHistory() {
-        var query = Utils.format("""
+        var query = formatter.execute("""
                         SELECT s.id, s.message_id, s.attempt, s.status, s.error_message, s.stack_trace, s.created_at, e.payload
                         FROM ${schema}.${subscriptionTableHistory} s JOIN ${messageTable} e ON s.message_id = e.id""",
                 Map.of("schema", TEST_SCHEMA.value(),
@@ -437,13 +429,13 @@ class MessageProcessorTest {
         }
     }
 
-    private class RetryableApplicationException extends RuntimeException {
+    private static class RetryableApplicationException extends RuntimeException {
         public RetryableApplicationException(String message) {
             super(message);
         }
     }
 
-    private class NonRetryableApplicationException extends RuntimeException {
+    private static class NonRetryableApplicationException extends RuntimeException {
         public NonRetryableApplicationException(String message) {
             super(message);
         }

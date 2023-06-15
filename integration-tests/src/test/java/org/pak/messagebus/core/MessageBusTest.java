@@ -7,7 +7,8 @@ import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.pak.messagebus.core.error.ExceptionClassifier;
 import org.pak.messagebus.core.error.ExceptionType;
-import org.pak.messagebus.pg.PgQueryServiceFactory;
+import org.pak.messagebus.pg.PgQueryService;
+import org.pak.messagebus.pg.jsonb.JsonbConverter;
 import org.pak.messagebus.spring.SpringPersistenceService;
 import org.pak.messagebus.spring.SpringTransactionService;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -38,6 +39,7 @@ class MessageBusTest {
     TransactionTemplate transactionTemplate;
     MessageBus messageBus;
     ViburDBCPDataSource dataSource;
+    JsonbConverter jsonbConverter;
     @Container
     PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>(DockerImageName.parse("postgres:15.1"));
 
@@ -51,9 +53,11 @@ class MessageBusTest {
         dataSource.start();
 
         jdbcTemplate = new JdbcTemplate(dataSource);
+        jsonbConverter = new JsonbConverter();
+        jsonbConverter.registerType(MESSAGE_TYPE.name(), TestMessage.class);
         transactionTemplate = new TransactionTemplate(new JdbcTransactionManager(dataSource) {});
         messageBus = new MessageBus(
-                new PgQueryServiceFactory(new SpringPersistenceService(jdbcTemplate), SCHEMA_NAME),
+                new PgQueryService(new SpringPersistenceService(jdbcTemplate), SCHEMA_NAME, jsonbConverter),
                 new SpringTransactionService(transactionTemplate), new ExceptionClassifier() {
             @Nonnull
             @Override

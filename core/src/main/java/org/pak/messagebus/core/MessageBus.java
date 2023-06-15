@@ -2,21 +2,23 @@ package org.pak.messagebus.core;
 
 import lombok.extern.slf4j.Slf4j;
 import org.pak.messagebus.core.error.ExceptionClassifier;
+import org.pak.messagebus.core.service.QueryService;
+import org.pak.messagebus.core.service.TransactionService;
 
 import java.util.concurrent.ConcurrentHashMap;
 
 @Slf4j
 public class MessageBus {
-    private final QueryServiceFactory persistenceMessageServiceFactory;
+    private final QueryService queryService;
     private final TransactionService transactionService;
     private final ExceptionClassifier exceptionClassifier;
 
     public MessageBus(
-            QueryServiceFactory queryServiceFactory,
+            QueryService queryService,
             TransactionService transactionService,
             ExceptionClassifier exceptionClassifier
     ) {
-        this.persistenceMessageServiceFactory = queryServiceFactory;
+        this.queryService = queryService;
         this.transactionService = transactionService;
         this.exceptionClassifier = exceptionClassifier;
     }
@@ -29,26 +31,17 @@ public class MessageBus {
             MessagePublisher<? extends Message>> messagePublishers = new ConcurrentHashMap<>();
 
     public <T extends Message> void registerPublisher(PublisherConfig<T> publisherConfig) {
-        var persistenceMessageService = persistenceMessageServiceFactory.createQueryService(
-                publisherConfig.getMessageType()
-        );
-
         messagePublishers.computeIfAbsent(publisherConfig.getMessageType(),
                 k -> new MessagePublisher<>(publisherConfig.getMessageType(),
                         publisherConfig.getTraceIdExtractor(),
-                        persistenceMessageService));
+                        queryService));
     }
 
     public <T extends Message> void registerSubscriber(SubscriberConfig<T> subscriberConfig) {
-        var persistenceMessageService =
-                persistenceMessageServiceFactory.createQueryService(
-                        subscriberConfig.getMessageType(),
-                        subscriberConfig.getSubscriptionType());
-
         messageProcessorStarters.computeIfAbsent(
                 subscriberConfig.getSubscriptionType(), s -> {
-                    var starter = new MessageProcessorStarter<>(subscriberConfig, persistenceMessageService,
-                            transactionService, exceptionClassifier);
+                    var starter = new MessageProcessorStarter<>(subscriberConfig, queryService, transactionService,
+                            exceptionClassifier);
                     log.info("Register subscriber on message {} with subscription {}",
                             subscriberConfig.getMessageType().name(),
                             subscriberConfig.getSubscriptionType().name());
@@ -60,11 +53,11 @@ public class MessageBus {
         ((MessagePublisher<T>) messagePublishers.get(message.messageType())).publish(message);
     }
 
-    void startSubscribers() {
+    public void startSubscribers() {
         messageProcessorStarters.values().forEach(MessageProcessorStarter::start);
     }
 
-    void stopSubscribers() {
+    public void stopSubscribers() {
         messageProcessorStarters.values().forEach(MessageProcessorStarter::stop);
     }
 }

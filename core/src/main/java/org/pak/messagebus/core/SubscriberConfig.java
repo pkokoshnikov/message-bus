@@ -4,6 +4,7 @@ import lombok.Builder;
 import lombok.Getter;
 import lombok.NonNull;
 import lombok.experimental.FieldDefaults;
+import org.pak.messagebus.core.*;
 
 @Builder
 @FieldDefaults(makeFinal = true, level = lombok.AccessLevel.PRIVATE)
@@ -24,5 +25,5 @@ public class SubscriberConfig<T extends Message> {
     @Builder.Default
     int maxPollRecords = 1;
     @Builder.Default
-    TraceIdExtractor<T> traceIdExtractor = (message) -> null;
+    TraceIdExtractor<T> traceIdExtractor = new NullTraceIdExtractor<>();
 }

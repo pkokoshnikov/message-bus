@@ -1,6 +1,6 @@
 package org.pak.messagebus.spring;
 
-import org.pak.messagebus.core.TransactionService;
+import org.pak.messagebus.core.service.TransactionService;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.function.Supplier;
