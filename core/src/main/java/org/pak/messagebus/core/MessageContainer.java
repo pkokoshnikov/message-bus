@@ -5,12 +5,14 @@ import lombok.experimental.FieldDefaults;
 
 import java.math.BigInteger;
 import java.time.Instant;
+import java.util.UUID;
 
 @Data
 @FieldDefaults(level = lombok.AccessLevel.PRIVATE)
 public class MessageContainer<T extends Message> {
     BigInteger id;
     BigInteger messageId;
+    String key;
     T message;
     Integer attempt;
     Instant executeAfter;

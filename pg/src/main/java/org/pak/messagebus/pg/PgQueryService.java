@@ -7,6 +7,7 @@ import org.pak.messagebus.core.Message;
 import org.pak.messagebus.core.MessageType;
 import org.pak.messagebus.core.SubscriptionType;
 import org.pak.messagebus.core.error.CoreException;
+import org.pak.messagebus.core.error.DuplicateKeyException;
 import org.pak.messagebus.core.service.PersistenceService;
 import org.pak.messagebus.core.service.QueryService;
 import org.pak.messagebus.pg.jsonb.JsonbConverter;
@@ -45,9 +46,13 @@ public class PgQueryService implements QueryService {
         var query = formatter.execute("""
                 CREATE TABLE IF NOT EXISTS ${schema}.${messageTable} (
                     id BIGSERIAL PRIMARY KEY,
+                    key TEXT,
                     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     execute_after TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    payload JSONB NOT NULL)
+                    payload JSONB NOT NULL);
+                
+                CREATE INDEX IF NOT EXISTS ${messageTable}_created_at_idx ON ${schema}.${messageTable}(created_at);
+                CREATE UNIQUE INDEX IF NOT EXISTS ${messageTable}_message_key_idx ON ${schema}.${messageTable}(key);
                 """, Map.of("schema", schemaName.value(),
                 "messageTable", messageTable(messageType)));
 
@@ -110,14 +115,15 @@ public class PgQueryService implements QueryService {
     }
 
     @Override
-    public <T extends Message> Object insertMessage(MessageType<T> messageType, T message) {
+    public <T extends Message> Object insertMessage(MessageType<T> messageType, String uniqueKey, T message)
+            throws DuplicateKeyException {
         var query = queryCache.computeIfAbsent("insertMessage|" + messageType.name(), k -> formatter.execute("""
-                        INSERT INTO ${schema}.${messageTable} (created_at, execute_after, payload)
-                        VALUES (CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?)""",
+                        INSERT INTO ${schema}.${messageTable} (created_at, execute_after, key, payload)
+                        VALUES (CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?, ?)""",
                 Map.of("schema", schemaName.value(),
                         "messageTable", messageTable(messageType))));
 
-        return persistenceService.insert(query, jsonbConverter.toPGObject(message));
+        return persistenceService.insert(query, uniqueKey, jsonbConverter.toPGObject(message));
     }
 
     @Override

@@ -117,7 +117,8 @@ class MessageProcessor<T extends Message> {
             var optionalTraceId = ofNullable(traceIdExtractor.extractTraceId(messageContainer.getMessage()))
                     .map(v -> MDC.putCloseable("traceId", v));
 
-            try (var ignoreExecutorId = MDC.putCloseable("messageId", messageContainer.getId().toString())) {
+            try (var ignoreExecutorIdMDC = MDC.putCloseable("messageId", messageContainer.getId().toString());
+                    var ignoreKeyMDC = MDC.putCloseable("messageKey", messageContainer.getKey())) {
                 try {
                     log.debug("Message handling started");
                     messageListener.handle(messageContainer.getMessage());

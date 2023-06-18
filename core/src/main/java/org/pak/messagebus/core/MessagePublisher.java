@@ -1,8 +1,12 @@
 package org.pak.messagebus.core;
 
 import lombok.extern.slf4j.Slf4j;
+import org.pak.messagebus.core.error.DuplicateKeyException;
 import org.pak.messagebus.core.service.QueryService;
 import org.slf4j.MDC;
+
+import java.util.Optional;
+import java.util.UUID;
 
 import static java.util.Optional.ofNullable;
 
@@ -25,20 +29,32 @@ class MessagePublisher<T extends Message> {
     }
 
     public void publish(T message) {
-        var optionalTraceId = ofNullable(traceIdExtractor.extractTraceId(message))
-                .map(v -> MDC.putCloseable("traceId", v));
+        publish(UUID.randomUUID().toString(), message);
+    }
 
-        try (var ignoredCollectionMDC = MDC.putCloseable("messageName", messageType.name())) {
+    public void publish(String uniqueKey, T message) {
+        var optionalTraceIdMDC = ofNullable(traceIdExtractor.extractTraceId(message))
+                .map(v -> MDC.putCloseable("traceId", v));
+        var optionalMessageIdMDC = Optional.<MDC.MDCCloseable>empty();
+
+        try (var ignoredCollectionMDC = MDC.putCloseable("messageName", messageType.name());
+                var ignoreKeyMDC = MDC.putCloseable("messageKey", uniqueKey)) {
             log.debug("Publish message {}", message);
 
-            ofNullable(queryService.insertMessage(messageType, message))
-                    .ifPresentOrElse(v -> {
-                        try (var ignoreExecutorId = MDC.putCloseable("messageId", v.toString())) {
-                            log.info("Published message");
-                        }
-                    }, () -> log.info("Published message"));
+            var messageId = queryService.insertMessage(messageType, uniqueKey, message);
+
+            optionalMessageIdMDC = ofNullable(messageId).map(v -> MDC.putCloseable("messageId", v.toString()));
+
+            log.info("Published message");
+        } catch (DuplicateKeyException e) {
+            if (log.isDebugEnabled()) {
+                log.warn("Duplicate key {} exception, {}", uniqueKey, message);
+            } else {
+                log.warn("Duplicate key {} exception", uniqueKey);
+            }
         } finally {
-            optionalTraceId.ifPresent(MDC.MDCCloseable::close);
+            optionalTraceIdMDC.ifPresent(MDC.MDCCloseable::close);
+            optionalMessageIdMDC.ifPresent(MDC.MDCCloseable::close);
         }
     }
 }

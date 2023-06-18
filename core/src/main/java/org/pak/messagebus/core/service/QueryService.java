@@ -6,6 +6,7 @@ import org.pak.messagebus.core.Message;
 import org.pak.messagebus.core.MessageType;
 import org.pak.messagebus.core.SubscriptionType;
 import org.pak.messagebus.core.error.CoreException;
+import org.pak.messagebus.core.error.DuplicateKeyException;
 
 import java.time.Duration;
 import java.util.List;
@@ -23,7 +24,8 @@ public interface QueryService {
 
     <T extends Message> void completeMessage(SubscriptionType<T> subscriptionType, MessageContainer<T> messageContainer);
 
-    <T extends Message> Object insertMessage(MessageType<T> messageType, T message);
+    <T extends Message> Object insertMessage(MessageType<T> messageType, String uniqueKey, T message)
+            throws DuplicateKeyException;
 
     default void assertNonEmptyUpdate(int updated, String query, Object... args) {
         if (updated == 0) {
