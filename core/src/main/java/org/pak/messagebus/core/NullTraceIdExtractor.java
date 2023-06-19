@@ -1,9 +1,9 @@
 package org.pak.messagebus.core;
 
-public class NullTraceIdExtractor<T extends Message> implements TraceIdExtractor<T>{
+public class NullTraceIdExtractor<T> implements TraceIdExtractor<T>{
 
     @Override
-    public String extractTraceId(T object) {
+    public String extractTraceId(Object object) {
         return null;
     }
 }

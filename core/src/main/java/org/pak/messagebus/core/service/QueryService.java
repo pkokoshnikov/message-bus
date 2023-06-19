@@ -1,39 +1,23 @@
 package org.pak.messagebus.core.service;
 
-import org.apache.commons.lang3.StringUtils;
-import org.pak.messagebus.core.MessageContainer;
-import org.pak.messagebus.core.Message;
-import org.pak.messagebus.core.MessageType;
-import org.pak.messagebus.core.SubscriptionType;
-import org.pak.messagebus.core.error.CoreException;
+import org.pak.messagebus.core.*;
 import org.pak.messagebus.core.error.DuplicateKeyException;
 
 import java.time.Duration;
 import java.util.List;
 
 public interface QueryService {
-    <T extends Message> void initMessageTable(MessageType<T> messageType);
+    void initMessageTable(MessageName messageName);
 
-    <T extends Message> void initSubscriptionTable(MessageType<T> messageType, SubscriptionType<T> subscriptionType);
+    void initSubscriptionTable(MessageName messageName, SubscriptionName subscriptionName);
 
-    <T extends Message> List<MessageContainer<T>> selectMessages(MessageType<T> messageType, SubscriptionType<T> subscriptionType, Integer maxPollRecords);
+    <T> List<MessageContainer<T>> selectMessages(MessageName messageName, SubscriptionName subscriptionName, Integer maxPollRecords);
 
-    <T extends Message> void retryMessage(SubscriptionType<T> subscriptionType, MessageContainer<T> messageContainer, Duration retryDuration, Exception e);
+    <T> void retryMessage(SubscriptionName subscriptionName, MessageContainer<T> messageContainer, Duration retryDuration, Exception e);
 
-    <T extends Message> void failMessage(SubscriptionType<T> subscriptionType, MessageContainer<T> messageContainer, Exception e);
+    <T> void failMessage(SubscriptionName subscriptionName, MessageContainer<T> messageContainer, Exception e);
 
-    <T extends Message> void completeMessage(SubscriptionType<T> subscriptionType, MessageContainer<T> messageContainer);
+    <T> void completeMessage(SubscriptionName subscriptionName, MessageContainer<T> messageContainer);
 
-    <T extends Message> Object insertMessage(MessageType<T> messageType, String uniqueKey, T message)
-            throws DuplicateKeyException;
-
-    default void assertNonEmptyUpdate(int updated, String query, Object... args) {
-        if (updated == 0) {
-            throw new CoreException(
-                    "Incorrect state, no records were updated by query %s for args %s".formatted(
-                            query,
-                            StringUtils.joinWith(", ", args))
-            );
-        }
-    }
+    <T> Object insertMessage(MessageName messageName, String uniqueKey, T message) throws DuplicateKeyException;
 }

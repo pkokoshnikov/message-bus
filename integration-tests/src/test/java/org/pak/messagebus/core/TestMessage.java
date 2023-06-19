@@ -8,11 +8,12 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 @Data
 public class TestMessage implements Message {
-    public static MessageType<TestMessage> MESSAGE_TYPE = new MessageType<>("test-message", TestMessage.class);
+    public static MessageName MESSAGE_NAME = new MessageName("test-message");
+
     private String name;
 
     @Override
-    public MessageType<TestMessage> messageType() {
-        return MESSAGE_TYPE;
+    public MessageName messageName() {
+        return MESSAGE_NAME;
     }
 }

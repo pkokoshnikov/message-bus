@@ -23,34 +23,32 @@ public class MessageBus {
         this.exceptionClassifier = exceptionClassifier;
     }
 
-    private final ConcurrentHashMap<
-            SubscriptionType<? extends Message>,
-            MessageProcessorStarter<? extends Message>> messageProcessorStarters = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<
-            MessageType<? extends Message>,
-            MessagePublisher<? extends Message>> messagePublishers = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, MessageProcessorStarter<?>> messageProcessorStarters =
+            new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Class<?>, MessagePublisher<?>> messagePublishers =
+            new ConcurrentHashMap<>();
 
-    public <T extends Message> void registerPublisher(PublisherConfig<T> publisherConfig) {
-        messagePublishers.computeIfAbsent(publisherConfig.getMessageType(),
-                k -> new MessagePublisher<>(publisherConfig.getMessageType(),
+    public <T> void registerPublisher(PublisherConfig<T> publisherConfig) {
+        messagePublishers.computeIfAbsent(publisherConfig.getClazz(),
+                k -> new MessagePublisher<>(publisherConfig.getMessageName(),
                         publisherConfig.getTraceIdExtractor(),
                         queryService));
     }
 
     public <T extends Message> void registerSubscriber(SubscriberConfig<T> subscriberConfig) {
         messageProcessorStarters.computeIfAbsent(
-                subscriberConfig.getSubscriptionType(), s -> {
+                subscriberConfig.getMessageName() + "_" + subscriberConfig.getSubscriptionName(), s -> {
                     var starter = new MessageProcessorStarter<>(subscriberConfig, queryService, transactionService,
                             exceptionClassifier);
                     log.info("Register subscriber on message {} with subscription {}",
-                            subscriberConfig.getMessageType().name(),
-                            subscriberConfig.getSubscriptionType().name());
+                            subscriberConfig.getMessageName(),
+                            subscriberConfig.getSubscriptionName());
                     return starter;
                 });
     }
 
-    public <T extends Message> void publish(T message) {
-        ((MessagePublisher<T>) messagePublishers.get(message.messageType())).publish(message);
+    public <T> void publish(T message) {
+        ((MessagePublisher<T>) messagePublishers.get(message.getClass())).publish(message);
     }
 
     public void startSubscribers() {

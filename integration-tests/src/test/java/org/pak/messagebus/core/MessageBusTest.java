@@ -25,15 +25,13 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.pak.messagebus.core.TestMessage.MESSAGE_TYPE;
+import static org.pak.messagebus.core.TestMessage.MESSAGE_NAME;
 
 @Testcontainers
 @Slf4j
 class MessageBusTest {
-    static SubscriptionType<TestMessage> SUBSCRIPTION_TYPE_1 =
-            new SubscriptionType<>("test-subscription-one", MESSAGE_TYPE);
-    static SubscriptionType<TestMessage> SUBSCRIPTION_TYPE_2 =
-            new SubscriptionType<>("test-subscription-two", MESSAGE_TYPE);
+    static SubscriptionName SUBSCRIPTION_NAME_1 = new SubscriptionName("test-subscription-one");
+    static SubscriptionName SUBSCRIPTION_NAME_2 = new SubscriptionName("test-subscription-two");
     static SchemaName SCHEMA_NAME = new SchemaName("public");
     JdbcTemplate jdbcTemplate;
     TransactionTemplate transactionTemplate;
@@ -54,15 +52,19 @@ class MessageBusTest {
 
         jdbcTemplate = new JdbcTemplate(dataSource);
         jsonbConverter = new JsonbConverter();
-        jsonbConverter.registerType(MESSAGE_TYPE.name(), TestMessage.class);
+        jsonbConverter.registerType(MESSAGE_NAME.name(), TestMessage.class);
         transactionTemplate = new TransactionTemplate(new JdbcTransactionManager(dataSource) {});
         messageBus = new MessageBus(
                 new PgQueryService(new SpringPersistenceService(jdbcTemplate), SCHEMA_NAME, jsonbConverter),
                 new SpringTransactionService(transactionTemplate), new ExceptionClassifier() {
-            @Nonnull
             @Override
-            public ExceptionType classify(Exception exception) {
-                return ExceptionType.RETRYABLE;
+            public boolean isBlockedException(Exception exception) {
+                return false;
+            }
+
+            @Override
+            public boolean isNonRetryableException(Exception exception) {
+                return false;
             }
         });
     }
@@ -75,7 +77,7 @@ class MessageBusTest {
     @Test
     void publishSubscribeTest() throws InterruptedException {
         messageBus.registerPublisher(PublisherConfig.<TestMessage>builder()
-                .messageType(MESSAGE_TYPE)
+                .messageName(MESSAGE_NAME)
                 .build());
 
         var countDownLatch = new CountDownLatch(2);
@@ -83,8 +85,8 @@ class MessageBusTest {
         var reference2 = new AtomicReference<TestMessage>();
 
         messageBus.registerSubscriber(SubscriberConfig.<TestMessage>builder()
-                .messageType(MESSAGE_TYPE)
-                .subscriptionType(SUBSCRIPTION_TYPE_1)
+                .messageName(MESSAGE_NAME)
+                .subscriptionName(SUBSCRIPTION_NAME_1)
                 .messageListener(message -> {
                     reference1.set(message);
                     countDownLatch.countDown();
@@ -92,8 +94,8 @@ class MessageBusTest {
                 .build());
 
         messageBus.registerSubscriber(SubscriberConfig.<TestMessage>builder()
-                .messageType(MESSAGE_TYPE)
-                .subscriptionType(SUBSCRIPTION_TYPE_2)
+                .messageName(MESSAGE_NAME)
+                .subscriptionName(SUBSCRIPTION_NAME_2)
                 .messageListener(message -> {
                     reference2.set(message);
                     countDownLatch.countDown();
@@ -118,14 +120,14 @@ class MessageBusTest {
         //only for manual running
     void performanceTest() throws InterruptedException {
         messageBus.registerPublisher(PublisherConfig.<TestMessage>builder()
-                .messageType(MESSAGE_TYPE)
+                .messageName(MESSAGE_NAME)
                 .build());
 
         var countDownLatch = new CountDownLatch(100_000);
 
         messageBus.registerSubscriber(SubscriberConfig.<TestMessage>builder()
-                .messageType(MESSAGE_TYPE)
-                .subscriptionType(SUBSCRIPTION_TYPE_1)
+                .messageName(MESSAGE_NAME)
+                .subscriptionName(SUBSCRIPTION_NAME_1)
                 .messageListener(message -> countDownLatch.countDown())
                 .concurrency(50)
                 .build());

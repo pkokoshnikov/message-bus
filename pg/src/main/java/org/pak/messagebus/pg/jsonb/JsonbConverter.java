@@ -11,7 +11,8 @@ import com.fasterxml.jackson.databind.cfg.CoercionAction;
 import com.fasterxml.jackson.databind.cfg.CoercionInputShape;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import lombok.extern.slf4j.Slf4j;
-import org.pak.messagebus.core.error.CoreException;
+import org.pak.messagebus.core.error.PersistenceException;
+import org.pak.messagebus.core.error.SerializerException;
 import org.postgresql.util.PGobject;
 
 import java.sql.SQLException;
@@ -40,9 +41,9 @@ public class JsonbConverter {
         this.objectMapper = objectMapper;
     }
 
-    public void registerType(String type, Class clazz) {
-        classTypeMap.put(clazz, type);
-        typeClassMap.put(type, clazz);
+    public void registerType(String name, Class clazz) {
+        classTypeMap.put(clazz, name);
+        typeClassMap.put(name, clazz);
         objectMapper.addMixIn(clazz, JsonbMixin.class);
     }
 
@@ -63,7 +64,7 @@ public class JsonbConverter {
                 return null;
             }
         } catch (JsonProcessingException e) {
-            throw new CoreException(e);
+            throw new SerializerException(e);
         }
     }
 
@@ -78,8 +79,10 @@ public class JsonbConverter {
             jsonObject.setValue(value);
 
             return (T) jsonObject;
-        } catch (SQLException | JsonProcessingException e) {
-            throw new CoreException(e);
+        } catch (SQLException e) {
+            throw new PersistenceException(e);
+        } catch (JsonProcessingException e) {
+            throw new SerializerException(e);
         }
     }
 }

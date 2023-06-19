@@ -15,7 +15,7 @@ import java.util.stream.IntStream;
 import static java.util.concurrent.TimeUnit.SECONDS;
 
 @Slf4j
-class MessageProcessorStarter<T extends Message> {
+class MessageProcessorStarter<T> {
     private final ExecutorService fixedThreadPoolExecutor;
     private final QueryService queryService;
     private final TransactionService transactionService;
@@ -47,15 +47,15 @@ class MessageProcessorStarter<T extends Message> {
 
     public void start() {
         if (isRunning.compareAndSet(false, true)) {
-            queryService.initMessageTable(subscriberConfig.getMessageType());
-            queryService.initSubscriptionTable(subscriberConfig.getMessageType(), subscriberConfig.getSubscriptionType());
+            queryService.initMessageTable(subscriberConfig.getMessageName());
+            queryService.initSubscriptionTable(subscriberConfig.getMessageName(), subscriberConfig.getSubscriptionName());
 
             messageProcessors = IntStream.range(0, subscriberConfig.getConcurrency()).boxed()
                     .map(i -> {
                         var taskExecutor = new MessageProcessor<>(
-                                subscriberConfig.getMessageListener(),
-                                subscriberConfig.getMessageType(),
-                                subscriberConfig.getSubscriptionType(),
+                                selectListenerStrategy(subscriberConfig),
+                                subscriberConfig.getMessageName(),
+                                subscriberConfig.getSubscriptionName(),
                                 subscriberConfig.getRetryablePolicy(),
                                 subscriberConfig.getBlockingPolicy(),
                                 exceptionClassifier,
@@ -68,6 +68,16 @@ class MessageProcessorStarter<T extends Message> {
                     }).toList();
         } else {
             log.warn("Event processor starter should be started only once");
+        }
+    }
+
+    private ListenerStrategy<T> selectListenerStrategy(SubscriberConfig<T> subscriberConfig) {
+        if (subscriberConfig.getMessageListener() != null) {
+            return new MessageListenerStrategy<>(subscriberConfig.getMessageListener());
+        } else if (subscriberConfig.getBatchMessageContainerListener() != null) {
+            return new BatchContainerListenerStrategy<>(subscriberConfig.getBatchMessageContainerListener());
+        } else {
+            throw new IllegalStateException("Message listener or batch message listener should be set");
         }
     }
 

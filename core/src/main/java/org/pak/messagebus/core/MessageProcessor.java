@@ -2,9 +2,7 @@ package org.pak.messagebus.core;
 
 import lombok.NonNull;
 import lombok.extern.slf4j.Slf4j;
-import org.pak.messagebus.core.error.CoreException;
-import org.pak.messagebus.core.error.ExceptionClassifier;
-import org.pak.messagebus.core.error.ExceptionType;
+import org.pak.messagebus.core.error.*;
 import org.pak.messagebus.core.service.QueryService;
 import org.pak.messagebus.core.service.TransactionService;
 import org.slf4j.MDC;
@@ -15,20 +13,21 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import static java.util.Optional.of;
 import static java.util.Optional.ofNullable;
 import static org.pak.messagebus.core.error.ExceptionType.RETRYABLE;
 
 @Slf4j
-class MessageProcessor<T extends Message> {
-    private static final Duration DEFAULT_BLOCKING_DURATION = Duration.of(30, ChronoUnit.SECONDS);
+class MessageProcessor<T> {
+    public static final Duration DEFAULT_BLOCKING_DURATION = Duration.of(30, ChronoUnit.SECONDS);
     private final String id = UUID.randomUUID().toString();
-    private final MessageListener<T> messageListener;
+    private final ListenerStrategy<T> listenerStrategy;
     private final RetryablePolicy retryablePolicy;
     private final BlockingPolicy blockingPolicy;
     private final ExceptionClassifier exceptionClassifier;
     private final QueryService queryService;
-    private final MessageType<T> messageType;
-    private final SubscriptionType<T> subscriptionType;
+    private final MessageName messageName;
+    private final SubscriptionName subscriptionName;
     private final TransactionService transactionService;
     private final TraceIdExtractor<T> traceIdExtractor;
     private Duration pause = null;
@@ -36,9 +35,9 @@ class MessageProcessor<T extends Message> {
     private final AtomicBoolean isRunning = new AtomicBoolean(false);
 
     MessageProcessor(
-            @NonNull MessageListener<T> messageListener,
-            @NonNull MessageType<T> messageType,
-            @NonNull SubscriptionType<T> subscriptionType,
+            @NonNull ListenerStrategy<T> listenerStrategy,
+            @NonNull MessageName messageName,
+            @NonNull SubscriptionName subscriptionName,
             @NonNull RetryablePolicy retryablePolicy,
             @NonNull BlockingPolicy blockingPolicy,
             @NonNull ExceptionClassifier exceptionClassifier,
@@ -47,13 +46,13 @@ class MessageProcessor<T extends Message> {
             @NonNull TraceIdExtractor<T> traceIdExtractor,
             @NonNull Integer maxPollRecords
     ) {
-        this.messageListener = messageListener;
+        this.listenerStrategy = listenerStrategy;
         this.retryablePolicy = retryablePolicy;
         this.blockingPolicy = blockingPolicy;
         this.exceptionClassifier = exceptionClassifier;
         this.queryService = queryService;
-        this.messageType = messageType;
-        this.subscriptionType = subscriptionType;
+        this.messageName = messageName;
+        this.subscriptionName = subscriptionName;
         this.transactionService = transactionService;
         this.traceIdExtractor = traceIdExtractor;
         this.maxPollRecords = maxPollRecords;
@@ -66,8 +65,8 @@ class MessageProcessor<T extends Message> {
         }
 
         try (var ignoreExecutorIdMDC = MDC.putCloseable("messageProcessorId", id);
-                var ignoredEventNameMDC = MDC.putCloseable("messageName", messageType.name());
-                var ignoredSubscriptionMDC = MDC.putCloseable("subscriptionName", subscriptionType.name())) {
+                var ignoredEventNameMDC = MDC.putCloseable("messageName", messageName.name());
+                var ignoredSubscriptionMDC = MDC.putCloseable("subscriptionName", subscriptionName.name())) {
             do {
                 try {
                     do {
@@ -91,13 +90,11 @@ class MessageProcessor<T extends Message> {
 
                     Thread.currentThread().interrupt();
                     isRunning.set(false);
+                } catch (SerializerException e) {
+                    log.error("Serializer exception occurred, we cannot skip messages", e);
+                    isRunning.set(false);
                 } catch (Exception e) {
-                    if (ofNullable(exceptionClassifier.classify(e)).orElse(RETRYABLE) == ExceptionType.BLOCKING) {
-                        handleBlockingException(e);
-                    } else {
-                        log.error("Unpredicted exception is occurred", e);
-                        pause = DEFAULT_BLOCKING_DURATION;
-                    }
+                    handleBlockingException(e);
                 }
             } while (isRunning.get());
 
@@ -107,57 +104,62 @@ class MessageProcessor<T extends Message> {
 
     boolean poolAndProcess() {
         List<MessageContainer<T>> messageContainerList =
-                queryService.selectMessages(messageType, subscriptionType, maxPollRecords);
+                queryService.selectMessages(messageName, subscriptionName, maxPollRecords);
 
         if (messageContainerList.size() == 0) {
             return false;
         }
 
+        listenerStrategy.onStartBatch(messageContainerList.size());
+
         for (var messageContainer : messageContainerList) {
-            var optionalTraceId = ofNullable(traceIdExtractor.extractTraceId(messageContainer.getMessage()))
+            var optionalTraceIdMDC = ofNullable(traceIdExtractor.extractTraceId(messageContainer.getMessage()))
                     .map(v -> MDC.putCloseable("traceId", v));
 
             try (var ignoreExecutorIdMDC = MDC.putCloseable("messageId", messageContainer.getId().toString());
                     var ignoreKeyMDC = MDC.putCloseable("messageKey", messageContainer.getKey())) {
                 try {
                     log.debug("Message handling started");
-                    messageListener.handle(messageContainer.getMessage());
+                    listenerStrategy.handle(messageContainer);
 
-                    queryService.completeMessage(subscriptionType, messageContainer);
+                    queryService.completeMessage(subscriptionName, messageContainer);
 
                     log.info("Message handling done");
-                } catch (CoreException e) {
-                    log.error("Core exception occurred", e);
-                    queryService.failMessage(subscriptionType, messageContainer, e);
+                } catch (IncorrectStateException e) {
+                    log.error("Incorrect state of processing", e);
+                } catch (PersistenceException e) {
+                    throw e;
                 } catch (Exception e) {
-                    switch (ofNullable(exceptionClassifier.classify(e)).orElse(RETRYABLE)) {
-                        case NON_RETRYABLE -> handleNonRetryableException(messageContainer, e);
-                        case BLOCKING -> handleBlockingException(e);
-                        case RETRYABLE -> handleRetryableException(messageContainer, e);
-                        default -> throw new CoreException("Unexpected value: " + exceptionClassifier.classify(e));
+                    if (exceptionClassifier.isBlockedException(e)) {
+                        handleBlockingException(e);
+                    } else if (exceptionClassifier.isNonRetryableException(e)) {
+                        handleNonRetryableException(messageContainer, e);
+                    } else {
+                        handleRetryableException(messageContainer, e);
                     }
                 } finally {
-                    optionalTraceId.ifPresent(MDC.MDCCloseable::close);
+                    optionalTraceIdMDC.ifPresent(MDC.MDCCloseable::close);
                 }
             }
         }
 
+        listenerStrategy.onEndBatch();
         return true;
     }
 
     private void handleNonRetryableException(MessageContainer<T> messageContainer, Exception e) {
         log.error("Non retryable exception occurred", e);
-        queryService.failMessage(subscriptionType, messageContainer, e);
+        queryService.failMessage(subscriptionName, messageContainer, e);
     }
 
     private void handleRetryableException(MessageContainer<T> messageContainer, Exception e) {
-        log.error("Exception occurred, attempt {}", messageContainer.getAttempt(), e);
-        var retryDuration = retryablePolicy.apply(e, messageContainer.getAttempt());
+        log.error("Retryable exception occurred, attempt {}", messageContainer.getAttempt(), e);
+        var optionalDuration = retryablePolicy.apply(e, messageContainer.getAttempt());
 
-        if (retryDuration == null || messageContainer.getAttempt().equals(Integer.MAX_VALUE - 1)) {
-            queryService.failMessage(subscriptionType, messageContainer, e);
+        if (optionalDuration.isEmpty() || messageContainer.getAttempt().equals(Integer.MAX_VALUE - 1)) {
+            queryService.failMessage(subscriptionName, messageContainer, e);
         } else {
-            queryService.retryMessage(subscriptionType, messageContainer, retryDuration, e);
+            queryService.retryMessage(subscriptionName, messageContainer, optionalDuration.get(), e);
 
             log.debug("Task will retry, attempt {} at {}", messageContainer.getAttempt() + 1,
                     messageContainer.getExecuteAfter());

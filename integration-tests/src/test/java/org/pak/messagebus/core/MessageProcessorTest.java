@@ -5,7 +5,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.pak.messagebus.core.error.ExceptionClassifier;
-import org.pak.messagebus.core.error.ExceptionType;
+import org.pak.messagebus.core.error.PersistenceException;
 import org.pak.messagebus.pg.PgQueryService;
 import org.pak.messagebus.pg.jsonb.JsonbConverter;
 import org.pak.messagebus.spring.SpringPersistenceService;
@@ -25,8 +25,10 @@ import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
+import static java.util.Optional.of;
 import static java.util.Optional.ofNullable;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.pak.messagebus.core.Status.FAILED;
@@ -35,8 +37,7 @@ import static org.pak.messagebus.core.Status.PROCESSED;
 @Testcontainers
 @Slf4j
 class MessageProcessorTest {
-    static SubscriptionType<TestMessage> TEST_SUBSCRIPTION_TYPE =
-            new SubscriptionType<>("test-subscription", TestMessage.MESSAGE_TYPE);
+    static SubscriptionName TEST_SUBSCRIPTION_TYPE = new SubscriptionName("test-subscription");
     static SchemaName TEST_SCHEMA = new SchemaName("public");
     static String TEST_VALUE = "test-value";
     static String TEST_EXCEPTION_MESSAGE = "test-exception-message";
@@ -50,13 +51,15 @@ class MessageProcessorTest {
     JdbcTemplate jdbcTemplate;
     JsonbConverter jsonbConverter;
     SpringTransactionService springTransactionService;
-    ExceptionClassifier testExceptionClassifier = exception -> {
-        if (BlockingApplicationException.class.isAssignableFrom(exception.getClass())) {
-            return ExceptionType.BLOCKING;
-        } else if (NonRetryableApplicationException.class.isAssignableFrom(exception.getClass())) {
-            return ExceptionType.NON_RETRYABLE;
-        } else {
-            return null;
+    ExceptionClassifier testExceptionClassifier = new ExceptionClassifier() {
+        @Override
+        public boolean isBlockedException(Exception exception) {
+            return BlockingApplicationException.class.isAssignableFrom(exception.getClass());
+        }
+
+        @Override
+        public boolean isNonRetryableException(Exception exception) {
+            return NonRetryableApplicationException.class.isAssignableFrom(exception.getClass());
         }
     };
 
@@ -72,29 +75,29 @@ class MessageProcessorTest {
 
         jdbcTemplate = new JdbcTemplate(dataSource);
         jsonbConverter = new JsonbConverter();
-        jsonbConverter.registerType(TestMessage.MESSAGE_TYPE.name(), TestMessage.MESSAGE_TYPE.messageClass());
+        jsonbConverter.registerType(TestMessage.MESSAGE_NAME.name(), TestMessage.class);
 
         springTransactionService =
                 new SpringTransactionService(new TransactionTemplate(new JdbcTransactionManager(dataSource) {}));
         pgQueryService = new PgQueryService(new SpringPersistenceService(jdbcTemplate), TEST_SCHEMA, jsonbConverter);
 
         messagePublisher =
-                new MessagePublisher<>(TestMessage.MESSAGE_TYPE, TestMessage::getName, pgQueryService);
+                new MessagePublisher<>(TestMessage.MESSAGE_NAME, TestMessage::getName, pgQueryService);
 
-        pgQueryService.initMessageTable(TestMessage.MESSAGE_TYPE);
-        pgQueryService.initSubscriptionTable(TestMessage.MESSAGE_TYPE, TEST_SUBSCRIPTION_TYPE);
+        pgQueryService.initMessageTable(TestMessage.MESSAGE_NAME);
+        pgQueryService.initSubscriptionTable(TestMessage.MESSAGE_NAME, TEST_SUBSCRIPTION_TYPE);
 
         messageProcessorFactory = MessageProcessorFactory.<TestMessage>builder()
                 .messageListener(testMessage -> log.info("Handle testMessage: {}", testMessage))
                 .queryService(pgQueryService)
                 .transactionService(springTransactionService)
                 .blockingPolicy(new SimpleBlockingPolicy())
-                .messageType(TestMessage.MESSAGE_TYPE)
-                .subscriptionType(TEST_SUBSCRIPTION_TYPE)
+                .messageName(TestMessage.MESSAGE_NAME)
+                .subscriptionName(TEST_SUBSCRIPTION_TYPE)
                 .maxPollRecords(maxPollRecords)
                 .retryablePolicy(new SimpleRetryablePolicy())
                 .exceptionClassifier(testExceptionClassifier)
-                .traceIdExtractor(new NullTraceIdExtractor<>())
+                .traceIdExtractor(object -> null)
                 .maxPollRecords(maxPollRecords);
     }
 
@@ -116,7 +119,7 @@ class MessageProcessorTest {
     }
 
     @Test
-    void testSuccessHandle() {
+    void testSuccessHandle() throws PersistenceException {
         var messageProcessor = messageProcessorFactory.build().create();
 
         TestMessage testMessage1 = new TestMessage(TEST_VALUE);
@@ -162,7 +165,7 @@ class MessageProcessorTest {
         var messageProcessor = messageProcessorFactory.messageListener(testMessage -> {
                     throw new RetryableApplicationException(TEST_EXCEPTION_MESSAGE);
                 })
-                .retryablePolicy((e, attempt) -> Duration.ofSeconds(600))
+                .retryablePolicy((e, attempt) -> of(Duration.ofSeconds(600)))
                 .build().create();
 
         TestMessage testMessage = new TestMessage(TEST_VALUE);
@@ -199,7 +202,7 @@ class MessageProcessorTest {
         var messageProcessor = messageProcessorFactory.messageListener(testMessage -> {
                     throw new RetryableApplicationException(TEST_EXCEPTION_MESSAGE);
                 })
-                .retryablePolicy((e, attempt) -> Duration.ofSeconds(0))
+                .retryablePolicy((e, attempt) -> of(Duration.ofSeconds(0)))
                 .build().create();
 
         TestMessage testMessage = new TestMessage(TEST_VALUE);
@@ -234,9 +237,9 @@ class MessageProcessorTest {
                 })
                 .retryablePolicy((e, attempt) -> {
                     if (attempt == 0) {
-                        return Duration.ofSeconds(0);
+                        return Optional.of(Duration.ofSeconds(0));
                     } else {
-                        return null;
+                        return Optional.empty();
                     }
                 })
                 .build().create();
@@ -263,31 +266,6 @@ class MessageProcessorTest {
         assertThat(testMessageHistoryContainer.getStatus()).isEqualTo(FAILED);
         assertThat(testMessageHistoryContainer.getErrorMessage()).isEqualTo(TEST_EXCEPTION_MESSAGE);
         assertThat(testMessageHistoryContainer.getStackTrace()).isNotNull();
-    }
-
-    @Test
-    void testBlockingExceptionIncorrectConfiguration() {
-        var messageProcessor = messageProcessorFactory.messageListener(testMessage -> {
-                    throw new BlockingApplicationException(TEST_EXCEPTION_MESSAGE);
-                })
-                .exceptionClassifier(
-                        exception -> BlockingApplicationException.class.isAssignableFrom(exception.getClass())
-                                ? ExceptionType.BLOCKING : ExceptionType.RETRYABLE)
-                .build().create();
-
-        TestMessage testMessage = new TestMessage(TEST_VALUE);
-        messagePublisher.publish(testMessage);
-
-        messageProcessor.poolAndProcess();
-        var testMessageContainer = hasSize1AndGetFirst(selectTestMessages());
-
-        assertThat(testMessageContainer.getMessage()).isEqualTo(testMessage);
-        assertThat(testMessageContainer.getCreated()).isNotNull();
-        assertThat(testMessageContainer.getUpdated()).isNull();
-        assertThat(testMessageContainer.getExecuteAfter()).isNotNull();
-        assertThat(testMessageContainer.getAttempt()).isEqualTo(0);
-        assertThat(testMessageContainer.getErrorMessage()).isNull();
-        assertThat(testMessageContainer.getStackTrace()).isNull();
     }
 
     @Test

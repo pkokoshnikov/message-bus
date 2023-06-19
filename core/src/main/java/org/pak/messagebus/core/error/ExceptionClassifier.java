@@ -1,5 +1,6 @@
 package org.pak.messagebus.core.error;
 
 public interface ExceptionClassifier {
-    ExceptionType classify(Exception exception);
+    boolean isBlockedException(Exception exception);
+    boolean isNonRetryableException(Exception exception);
 }

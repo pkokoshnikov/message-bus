@@ -11,8 +11,8 @@ import org.pak.messagebus.core.service.TransactionService;
 @FieldDefaults(level = AccessLevel.PRIVATE)
 class MessageProcessorFactory<T extends Message> {
     MessageListener<T> messageListener;
-    MessageType<T> messageType;
-    SubscriptionType<T> subscriptionType;
+    MessageName messageName;
+    SubscriptionName subscriptionName;
     RetryablePolicy retryablePolicy;
     BlockingPolicy blockingPolicy;
     ExceptionClassifier exceptionClassifier;
@@ -22,7 +22,7 @@ class MessageProcessorFactory<T extends Message> {
     Integer maxPollRecords;
 
     MessageProcessor<T> create() {
-        return new MessageProcessor<>(messageListener, messageType, subscriptionType, retryablePolicy,
+        return new MessageProcessor<>(new MessageListenerStrategy<>(messageListener), messageName, subscriptionName, retryablePolicy,
                 blockingPolicy, exceptionClassifier, queryService, transactionService, traceIdExtractor,
                 maxPollRecords);
     }

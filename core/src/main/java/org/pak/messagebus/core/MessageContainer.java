@@ -9,7 +9,7 @@ import java.util.UUID;
 
 @Data
 @FieldDefaults(level = lombok.AccessLevel.PRIVATE)
-public class MessageContainer<T extends Message> {
+public class MessageContainer<T> {
     BigInteger id;
     BigInteger messageId;
     String key;
