@@ -301,8 +301,8 @@ class MessageProcessorTest {
         TestMessage testMessage = new TestMessage(TEST_VALUE);
         var key = UUID.randomUUID().toString();
         var originatedTime = Instant.now();
-        messagePublisher.publish(key, originatedTime, testMessage);
-        messagePublisher.publish(key, originatedTime, testMessage);
+        messagePublisher.publish(new MessageDetails<>(key, originatedTime, testMessage));
+        messagePublisher.publish(new MessageDetails<>(key, originatedTime, testMessage));
 
         var testMessageContainer = hasSize1AndGetFirst(selectTestMessages());
 

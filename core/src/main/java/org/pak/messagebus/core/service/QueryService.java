@@ -1,5 +1,6 @@
 package org.pak.messagebus.core.service;
 
+import org.apache.commons.lang3.tuple.Triple;
 import org.pak.messagebus.core.*;
 import org.pak.messagebus.core.error.DuplicateKeyException;
 
@@ -20,5 +21,6 @@ public interface QueryService {
 
     <T> void completeMessage(SubscriptionName subscriptionName, MessageContainer<T> messageContainer);
 
-    <T> Object insertMessage(MessageName messageName, String uniqueKey, Instant originatedTime, T message) throws DuplicateKeyException;
+    <T> boolean insertMessage(MessageName messageName, MessageDetails<T> messageDetails);
+    <T> List<Boolean> insertBatchMessage(MessageName messageName, List<MessageDetails<T>> messages);
 }

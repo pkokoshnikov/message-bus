@@ -1,12 +1,10 @@
 package org.pak.messagebus.core;
 
 import lombok.extern.slf4j.Slf4j;
-import org.pak.messagebus.core.error.DuplicateKeyException;
 import org.pak.messagebus.core.service.QueryService;
 import org.slf4j.MDC;
 
 import java.time.Instant;
-import java.util.Optional;
 import java.util.UUID;
 
 import static java.util.Optional.ofNullable;
@@ -30,36 +28,30 @@ class MessagePublisher<T> {
     }
 
     public void publish(T message) {
-        publish(UUID.randomUUID().toString(), Instant.now(), message);
+        publish(new MessageDetails<>(UUID.randomUUID().toString(), Instant.now(), message));
     }
 
     //TODO: add create time
     //TODO: add message types: COMMAND, EVENT, QUERY, REPLY
     //TODO: cleaner
     //TODO: partitioning
-    public void publish(String uniqueKey, Instant originatedTime, T message) {
-        var optionalTraceIdMDC = ofNullable(traceIdExtractor.extractTraceId(message))
+    public void publish(MessageDetails<T> messageDetails) {
+        var optionalTraceIdMDC = ofNullable(traceIdExtractor.extractTraceId(messageDetails.getMessage()))
                 .map(v -> MDC.putCloseable("traceId", v));
-        var optionalMessageIdMDC = Optional.<MDC.MDCCloseable>empty();
 
         try (var ignoredCollectionMDC = MDC.putCloseable("messageName", messageName.name());
-                var ignoreKeyMDC = MDC.putCloseable("messageKey", uniqueKey)) {
-            log.debug("Publish message {}", message);
+                var ignoreKeyMDC = MDC.putCloseable("messageKey", messageDetails.getKey())) {
+            log.debug("Publish message {}", messageDetails.getMessage());
 
-            var messageId = queryService.insertMessage(messageName, uniqueKey, originatedTime, message);
+            var inserted = queryService.insertMessage(messageName, messageDetails);
 
-            optionalMessageIdMDC = ofNullable(messageId).map(v -> MDC.putCloseable("messageId", v.toString()));
-
-            log.info("Published message");
-        } catch (DuplicateKeyException e) {
-            if (log.isDebugEnabled()) {
-                log.warn("Duplicate key {} exception, {}", uniqueKey, message);
+            if (inserted) {
+                log.info("Published message");
             } else {
-                log.warn("Duplicate key {} exception", uniqueKey);
+                log.warn("Duplicate key {}, {}", messageDetails.getKey(), messageDetails.getOriginatedTime());
             }
         } finally {
             optionalTraceIdMDC.ifPresent(MDC.MDCCloseable::close);
-            optionalMessageIdMDC.ifPresent(MDC.MDCCloseable::close);
         }
     }
 }

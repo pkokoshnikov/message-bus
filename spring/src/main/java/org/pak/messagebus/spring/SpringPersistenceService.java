@@ -47,26 +47,22 @@ public class SpringPersistenceService implements PersistenceService {
         }
     }
 
-    public Object insert(String query, Object... args) throws DuplicateKeyException {
+    public int insert(String query, Object... args) {
         try {
-            return jdbcTemplate.execute(
-                    (PreparedStatementCreator) con -> con.prepareStatement(query, new String[]{"id"}),
-                    ps -> {
-                        new ArgumentPreparedStatementSetter(args).setValues(ps);
-                        ps.executeUpdate();
-                        ResultSet keys = ps.getGeneratedKeys();
-                        try {
-                            keys.next();
-                            return JdbcUtils.getResultSetValue(keys, 1);
-                        } finally {
-                            JdbcUtils.closeResultSet(keys);
-                        }
-                    });
-        } catch (org.springframework.dao.DuplicateKeyException exception) {
-            throw new DuplicateKeyException();
+            return jdbcTemplate.update(query, args);
         } catch (Exception e) {
             classifyException(e);
-            return null;
+            return 0;
+        }
+    }
+
+    @Override
+    public int[] batchInsert(String query, List<Object[]> args) {
+        try {
+            return jdbcTemplate.batchUpdate(query, args);
+        } catch (Exception e) {
+            classifyException(e);
+            return new int[0];
         }
     }
 
