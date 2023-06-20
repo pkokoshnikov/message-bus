@@ -1,11 +1,13 @@
 package org.pak.messagebus.core;
 
 
+import eu.rekawek.toxiproxy.Proxy;
+import eu.rekawek.toxiproxy.ToxiproxyClient;
+import eu.rekawek.toxiproxy.model.ToxicDirection;
+import lombok.NonNull;
 import lombok.extern.slf4j.Slf4j;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.pak.messagebus.core.error.ExceptionClassifier;
-import org.pak.messagebus.core.error.PersistenceException;
+import org.junit.jupiter.api.*;
+import org.pak.messagebus.core.error.RetrayablePersistenceException;
 import org.pak.messagebus.pg.PgQueryService;
 import org.pak.messagebus.pg.jsonb.JsonbConverter;
 import org.pak.messagebus.spring.SpringPersistenceService;
@@ -15,13 +17,17 @@ import org.postgresql.util.PGobject;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.support.JdbcTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.testcontainers.containers.Network;
 import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.containers.ToxiproxyContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
+import java.io.IOException;
 import java.math.BigInteger;
 import java.time.Duration;
+import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
@@ -45,30 +51,35 @@ class MessageProcessorTest {
     PgQueryService pgQueryService;
     StringFormatter formatter = new StringFormatter();
 
+    static Network network = Network.newNetwork();
+
     @Container
-    PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>(DockerImageName.parse("postgres:15.1"));
+    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>(DockerImageName.parse("postgres:15.1"))
+            .withNetwork(network)
+            .withNetworkAliases("postgres");
+    @Container
+    static ToxiproxyContainer toxiproxy = new ToxiproxyContainer("ghcr.io/shopify/toxiproxy:2.5.0")
+            .withNetwork(network);
+    static Proxy postgresqlProxy;
     Integer maxPollRecords = 1;
     JdbcTemplate jdbcTemplate;
     JsonbConverter jsonbConverter;
     SpringTransactionService springTransactionService;
-    ExceptionClassifier testExceptionClassifier = new ExceptionClassifier() {
-        @Override
-        public boolean isBlockedException(Exception exception) {
-            return BlockingApplicationException.class.isAssignableFrom(exception.getClass());
-        }
-
-        @Override
-        public boolean isNonRetryableException(Exception exception) {
-            return NonRetryableApplicationException.class.isAssignableFrom(exception.getClass());
-        }
-    };
-
     MessageProcessorFactory.MessageProcessorFactoryBuilder<TestMessage> messageProcessorFactory;
+
+    @BeforeAll
+    static void beforeAll() throws IOException {
+        var toxiproxyClient = new ToxiproxyClient(toxiproxy.getHost(), toxiproxy.getControlPort());
+        postgresqlProxy = toxiproxyClient.createProxy("postgresql", "0.0.0.0:8666", "postgres:5432");
+    }
 
     @BeforeEach
     void setUp() {
+        var jdbcUrl = "jdbc:postgresql://%s:%d/%s".formatted(toxiproxy.getHost(), toxiproxy.getMappedPort(8666),
+                postgres.getDatabaseName());
+
         var dataSource = new PGSimpleDataSource();
-        dataSource.setUrl(postgres.getJdbcUrl());
+        dataSource.setUrl(jdbcUrl);
         dataSource.setDatabaseName(postgres.getDatabaseName());
         dataSource.setUser(postgres.getUsername());
         dataSource.setPassword(postgres.getPassword());
@@ -91,14 +102,28 @@ class MessageProcessorTest {
                 .messageListener(testMessage -> log.info("Handle testMessage: {}", testMessage))
                 .queryService(pgQueryService)
                 .transactionService(springTransactionService)
+                .retryablePolicy(new SimpleRetryablePolicy())
                 .blockingPolicy(new SimpleBlockingPolicy())
+                .nonRetryablePolicy(new SimpleNonRetryablePolicy())
                 .messageName(TestMessage.MESSAGE_NAME)
                 .subscriptionName(TEST_SUBSCRIPTION_TYPE)
-                .maxPollRecords(maxPollRecords)
-                .retryablePolicy(new SimpleRetryablePolicy())
-                .exceptionClassifier(testExceptionClassifier)
                 .traceIdExtractor(object -> null)
-                .maxPollRecords(maxPollRecords);
+                .properties(SubscriberConfig.Properties.builder().build());
+    }
+
+    @AfterEach
+    void clear() {
+        jdbcTemplate.update(formatter.execute("DROP TABLE IF EXISTS ${schema}.${subscriptionTable}",
+                Map.of("schema", TEST_SCHEMA.value(),
+                        "subscriptionTable", "test_subscription")));
+
+        jdbcTemplate.update(formatter.execute("DROP TABLE IF EXISTS ${schema}.${subscriptionTable}_history",
+                Map.of("schema", TEST_SCHEMA.value(),
+                        "subscriptionTable", "test_subscription")));
+
+        jdbcTemplate.update(formatter.execute("DROP TABLE IF EXISTS ${schema}.${messageTable}",
+                Map.of("schema", TEST_SCHEMA.value(),
+                        "messageTable", "test_message")));
     }
 
     @Test
@@ -111,6 +136,7 @@ class MessageProcessorTest {
 
         assertThat(testMessageContainer.getMessage()).isEqualTo(testMessage);
         assertThat(testMessageContainer.getCreated()).isNotNull();
+        assertThat(testMessageContainer.getOriginated()).isNotNull();
         assertThat(testMessageContainer.getUpdated()).isNull();
         assertThat(testMessageContainer.getExecuteAfter()).isNotNull();
         assertThat(testMessageContainer.getAttempt()).isEqualTo(0);
@@ -119,7 +145,7 @@ class MessageProcessorTest {
     }
 
     @Test
-    void testSuccessHandle() throws PersistenceException {
+    void testSuccessHandle() throws RetrayablePersistenceException {
         var messageProcessor = messageProcessorFactory.build().create();
 
         TestMessage testMessage1 = new TestMessage(TEST_VALUE);
@@ -146,6 +172,8 @@ class MessageProcessorTest {
         var messageProcessor = messageProcessorFactory.messageListener(testMessage -> {
                     throw new NonRetryableApplicationException(TEST_EXCEPTION_MESSAGE);
                 })
+                .nonRetryablePolicy(
+                        exception -> NonRetryableApplicationException.class.isAssignableFrom(exception.getClass()))
                 .build().create();
 
         TestMessage testMessage = new TestMessage(TEST_VALUE);
@@ -272,9 +300,9 @@ class MessageProcessorTest {
     void testDuplicateKeyPublish() {
         TestMessage testMessage = new TestMessage(TEST_VALUE);
         var key = UUID.randomUUID().toString();
-
-        messagePublisher.publish(key, testMessage);
-        messagePublisher.publish(key, testMessage);
+        var originatedTime = Instant.now();
+        messagePublisher.publish(key, originatedTime, testMessage);
+        messagePublisher.publish(key, originatedTime, testMessage);
 
         var testMessageContainer = hasSize1AndGetFirst(selectTestMessages());
 
@@ -288,9 +316,34 @@ class MessageProcessorTest {
     }
 
     @Test
+    void testTimeoutException() throws IOException {
+        var messageProcessor = messageProcessorFactory.build().create();
+
+        TestMessage testMessage = new TestMessage(TEST_VALUE);
+        messagePublisher.publish(testMessage);
+
+        var timeout = postgresqlProxy.toxics().timeout("pg-timeout", ToxicDirection.DOWNSTREAM, 1000);
+
+        Assertions.assertThrows(RetrayablePersistenceException.class, messageProcessor::poolAndProcess);
+
+        timeout.remove();
+    }
+
+    @Test
     void testBlockingException() {
         var messageProcessor = messageProcessorFactory.messageListener(testMessage -> {
                     throw new BlockingApplicationException(TEST_EXCEPTION_MESSAGE);
+                })
+                .blockingPolicy(new BlockingPolicy() {
+                    @Override
+                    public boolean isBlocked(Exception exception) {
+                        return BlockingApplicationException.class.isAssignableFrom(exception.getClass());
+                    }
+
+                    @Override
+                    public @NonNull Duration apply(Exception exception) {
+                        return Duration.ofMillis(30_000);
+                    }
                 })
                 .build().create();
 
@@ -323,8 +376,8 @@ class MessageProcessorTest {
     List<MessageContainer<TestMessage>> selectTestMessages() {
         var query = formatter.execute("""
                         SELECT s.id, s.message_id, s.attempt, s.error_message, s.stack_trace, s.created_at, s.updated_at,
-                            s.execute_after, e.payload
-                        FROM ${schema}.${subscriptionTable} s JOIN ${schema}.${messageTable} e ON s.message_id = e.id""",
+                            s.execute_after, m.payload, m.originated_at
+                        FROM ${schema}.${subscriptionTable} s JOIN ${schema}.${messageTable} m ON s.message_id = m.id""",
                 Map.of("schema", TEST_SCHEMA.value(),
                         "subscriptionTable", "test_subscription",
                         "messageTable", "test_message"));
@@ -340,6 +393,8 @@ class MessageProcessorTest {
                                 .map(OffsetDateTime::toInstant).orElse(null),
                         ofNullable(rs.getObject("updated_at", OffsetDateTime.class))
                                 .map(OffsetDateTime::toInstant).orElse(null),
+                        ofNullable(rs.getObject("originated_at", OffsetDateTime.class))
+                                .map(OffsetDateTime::toInstant).orElse(null),
                         jsonbConverter.toJsonb(rs.getObject("payload", PGobject.class)),
                         rs.getString("error_message"),
                         rs.getString("stack_trace")));
@@ -347,8 +402,8 @@ class MessageProcessorTest {
 
     List<MessageHistoryContainer<TestMessage>> selectTestMessagesFromHistory() {
         var query = formatter.execute("""
-                        SELECT s.id, s.message_id, s.attempt, s.status, s.error_message, s.stack_trace, s.created_at, e.payload
-                        FROM ${schema}.${subscriptionTableHistory} s JOIN ${messageTable} e ON s.message_id = e.id""",
+                        SELECT s.id, s.message_id, s.attempt, s.status, s.error_message, s.stack_trace, s.created_at, m.payload
+                        FROM ${schema}.${subscriptionTableHistory} s JOIN ${messageTable} m ON s.message_id = m.id""",
                 Map.of("schema", TEST_SCHEMA.value(),
                         "subscriptionTableHistory", "test_subscription_history",
                         "messageTable", "test_message"));

@@ -5,8 +5,6 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
-import org.pak.messagebus.core.error.ExceptionClassifier;
-import org.pak.messagebus.core.error.ExceptionType;
 import org.pak.messagebus.pg.PgQueryService;
 import org.pak.messagebus.pg.jsonb.JsonbConverter;
 import org.pak.messagebus.spring.SpringPersistenceService;
@@ -20,7 +18,6 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 import org.vibur.dbcp.ViburDBCPDataSource;
 
-import javax.annotation.Nonnull;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -39,7 +36,7 @@ class MessageBusTest {
     ViburDBCPDataSource dataSource;
     JsonbConverter jsonbConverter;
     @Container
-    PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>(DockerImageName.parse("postgres:15.1"));
+    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>(DockerImageName.parse("postgres:15.1"));
 
     @BeforeEach
     void setUp() {
@@ -56,17 +53,7 @@ class MessageBusTest {
         transactionTemplate = new TransactionTemplate(new JdbcTransactionManager(dataSource) {});
         messageBus = new MessageBus(
                 new PgQueryService(new SpringPersistenceService(jdbcTemplate), SCHEMA_NAME, jsonbConverter),
-                new SpringTransactionService(transactionTemplate), new ExceptionClassifier() {
-            @Override
-            public boolean isBlockedException(Exception exception) {
-                return false;
-            }
-
-            @Override
-            public boolean isNonRetryableException(Exception exception) {
-                return false;
-            }
-        });
+                new SpringTransactionService(transactionTemplate));
     }
 
     @AfterEach
@@ -78,6 +65,7 @@ class MessageBusTest {
     void publishSubscribeTest() throws InterruptedException {
         messageBus.registerPublisher(PublisherConfig.<TestMessage>builder()
                 .messageName(MESSAGE_NAME)
+                .clazz(TestMessage.class)
                 .build());
 
         var countDownLatch = new CountDownLatch(2);
@@ -115,9 +103,9 @@ class MessageBusTest {
         assertThat(handledMessage2).isEqualTo(testMessage);
     }
 
+    //only for manual running
     @Test
     @Disabled
-        //only for manual running
     void performanceTest() throws InterruptedException {
         messageBus.registerPublisher(PublisherConfig.<TestMessage>builder()
                 .messageName(MESSAGE_NAME)
@@ -129,7 +117,9 @@ class MessageBusTest {
                 .messageName(MESSAGE_NAME)
                 .subscriptionName(SUBSCRIPTION_NAME_1)
                 .messageListener(message -> countDownLatch.countDown())
-                .concurrency(50)
+                .properties(SubscriberConfig.Properties.builder()
+                        .concurrency(50)
+                        .build())
                 .build());
 
         messageBus.startSubscribers();

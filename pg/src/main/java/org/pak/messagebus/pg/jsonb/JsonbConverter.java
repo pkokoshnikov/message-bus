@@ -11,7 +11,7 @@ import com.fasterxml.jackson.databind.cfg.CoercionAction;
 import com.fasterxml.jackson.databind.cfg.CoercionInputShape;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import lombok.extern.slf4j.Slf4j;
-import org.pak.messagebus.core.error.PersistenceException;
+import org.pak.messagebus.core.error.RetrayablePersistenceException;
 import org.pak.messagebus.core.error.SerializerException;
 import org.postgresql.util.PGobject;
 
@@ -80,7 +80,7 @@ public class JsonbConverter {
 
             return (T) jsonObject;
         } catch (SQLException e) {
-            throw new PersistenceException(e);
+            throw new RetrayablePersistenceException(e);
         } catch (JsonProcessingException e) {
             throw new SerializerException(e);
         }

@@ -9,29 +9,31 @@ import org.slf4j.MDC;
 
 import java.time.Duration;
 import java.time.temporal.ChronoUnit;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import static java.util.Optional.of;
 import static java.util.Optional.ofNullable;
-import static org.pak.messagebus.core.error.ExceptionType.RETRYABLE;
 
 @Slf4j
 class MessageProcessor<T> {
-    public static final Duration DEFAULT_BLOCKING_DURATION = Duration.of(30, ChronoUnit.SECONDS);
+
     private final String id = UUID.randomUUID().toString();
     private final ListenerStrategy<T> listenerStrategy;
     private final RetryablePolicy retryablePolicy;
+    private final NonRetryablePolicy nonRetryablePolicy;
     private final BlockingPolicy blockingPolicy;
-    private final ExceptionClassifier exceptionClassifier;
     private final QueryService queryService;
     private final MessageName messageName;
     private final SubscriptionName subscriptionName;
     private final TransactionService transactionService;
     private final TraceIdExtractor<T> traceIdExtractor;
     private Duration pause = null;
+    private final Duration unpredictedExceptionPause;
     private final Integer maxPollRecords;
+    private final Duration persistenceExceptionPause;
     private final AtomicBoolean isRunning = new AtomicBoolean(false);
 
     MessageProcessor(
@@ -39,23 +41,25 @@ class MessageProcessor<T> {
             @NonNull MessageName messageName,
             @NonNull SubscriptionName subscriptionName,
             @NonNull RetryablePolicy retryablePolicy,
+            @NonNull NonRetryablePolicy nonRetryablePolicy,
             @NonNull BlockingPolicy blockingPolicy,
-            @NonNull ExceptionClassifier exceptionClassifier,
             @NonNull QueryService queryService,
             @NonNull TransactionService transactionService,
             @NonNull TraceIdExtractor<T> traceIdExtractor,
-            @NonNull Integer maxPollRecords
+            @NonNull SubscriberConfig.Properties properties
     ) {
         this.listenerStrategy = listenerStrategy;
         this.retryablePolicy = retryablePolicy;
+        this.nonRetryablePolicy = nonRetryablePolicy;
         this.blockingPolicy = blockingPolicy;
-        this.exceptionClassifier = exceptionClassifier;
         this.queryService = queryService;
         this.messageName = messageName;
         this.subscriptionName = subscriptionName;
         this.transactionService = transactionService;
         this.traceIdExtractor = traceIdExtractor;
-        this.maxPollRecords = maxPollRecords;
+        this.maxPollRecords = properties.getMaxPollRecords();
+        this.persistenceExceptionPause = properties.getPersistenceExceptionPause();
+        this.unpredictedExceptionPause = properties.getUnpredictedExceptionPause();
     }
 
     public void poolLoop() {
@@ -68,9 +72,11 @@ class MessageProcessor<T> {
                 var ignoredEventNameMDC = MDC.putCloseable("messageName", messageName.name());
                 var ignoredSubscriptionMDC = MDC.putCloseable("subscriptionName", subscriptionName.name())) {
             do {
+                log.info("Start pooling");
                 try {
                     do {
                         if (pause != null) {
+                            log.info("Pause pooling {}", pause);
                             Thread.sleep(pause.toMillis());
                             pause = null;
                         }
@@ -93,8 +99,15 @@ class MessageProcessor<T> {
                 } catch (SerializerException e) {
                     log.error("Serializer exception occurred, we cannot skip messages", e);
                     isRunning.set(false);
+                } catch (NonRetrayablePersistenceException e) {
+                    log.error("Non recoverable persistence exception occurred, stop processing", e);
+                    isRunning.set(false);
+                } catch (RetrayablePersistenceException e) {
+                    log.error("Recoverable persistence exception occurred", e);
+                    pause = persistenceExceptionPause;
                 } catch (Exception e) {
-                    handleBlockingException(e);
+                    log.error("Unexpected exception occurred", e);
+                    pause = unpredictedExceptionPause;
                 }
             } while (isRunning.get());
 
@@ -125,14 +138,12 @@ class MessageProcessor<T> {
                     queryService.completeMessage(subscriptionName, messageContainer);
 
                     log.info("Message handling done");
-                } catch (IncorrectStateException e) {
-                    log.error("Incorrect state of processing", e);
                 } catch (PersistenceException e) {
                     throw e;
                 } catch (Exception e) {
-                    if (exceptionClassifier.isBlockedException(e)) {
+                    if (blockingPolicy.isBlocked(e)) {
                         handleBlockingException(e);
-                    } else if (exceptionClassifier.isNonRetryableException(e)) {
+                    } else if (nonRetryablePolicy.isNonRetryable(e)) {
                         handleNonRetryableException(messageContainer, e);
                     } else {
                         handleRetryableException(messageContainer, e);
@@ -169,13 +180,6 @@ class MessageProcessor<T> {
     private void handleBlockingException(Exception e) {
         log.error("Blocking exception occurred", e);
         pause = blockingPolicy.apply(e);
-
-        if (pause == null) {
-            log.warn("Blocking policy configured incorrectly, duration cannot be null");
-            pause = DEFAULT_BLOCKING_DURATION;
-        }
-
-        log.info("Block message processor until {}", pause);
     }
 
     public void stop() {

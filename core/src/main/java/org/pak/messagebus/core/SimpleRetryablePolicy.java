@@ -4,6 +4,7 @@ import java.time.Duration;
 import java.util.Optional;
 
 public class SimpleRetryablePolicy implements RetryablePolicy {
+
     @Override
     public Optional<Duration> apply(Exception e, Integer attempt) {
         if (attempt > 10000) {

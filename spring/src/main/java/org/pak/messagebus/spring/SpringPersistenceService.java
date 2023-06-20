@@ -1,8 +1,10 @@
 package org.pak.messagebus.spring;
 
 import org.pak.messagebus.core.error.DuplicateKeyException;
-import org.pak.messagebus.core.error.PersistenceException;
+import org.pak.messagebus.core.error.NonRetrayablePersistenceException;
+import org.pak.messagebus.core.error.RetrayablePersistenceException;
 import org.pak.messagebus.core.service.PersistenceService;
+import org.springframework.jdbc.BadSqlGrammarException;
 import org.springframework.jdbc.core.ArgumentPreparedStatementSetter;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.PreparedStatementCallback;
@@ -32,7 +34,7 @@ public class SpringPersistenceService implements PersistenceService {
                         return null;
                     });
         } catch (Exception e) {
-            throw new PersistenceException(e);
+            classifyException(e);
         }
     }
 
@@ -40,7 +42,8 @@ public class SpringPersistenceService implements PersistenceService {
         try {
             return jdbcTemplate.update(query, args);
         } catch (Exception e) {
-            throw new PersistenceException(e);
+            classifyException(e);
+            return 0;
         }
     }
 
@@ -62,7 +65,16 @@ public class SpringPersistenceService implements PersistenceService {
         } catch (org.springframework.dao.DuplicateKeyException exception) {
             throw new DuplicateKeyException();
         } catch (Exception e) {
-            throw new PersistenceException(e);
+            classifyException(e);
+            return null;
+        }
+    }
+
+    private void classifyException(Exception e) {
+        if (BadSqlGrammarException.class.isAssignableFrom(e.getClass())) {
+            throw new NonRetrayablePersistenceException(e);
+        } else {
+            throw new RetrayablePersistenceException(e);
         }
     }
 
@@ -71,7 +83,8 @@ public class SpringPersistenceService implements PersistenceService {
         try {
             return jdbcTemplate.query(query, (rs, rowNum) -> mapper.apply(rs));
         } catch (Exception e) {
-            throw new PersistenceException(e);
+            classifyException(e);
+            return null;
         }
     }
 }

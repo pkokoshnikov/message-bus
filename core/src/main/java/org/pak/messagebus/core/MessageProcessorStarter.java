@@ -2,7 +2,6 @@ package org.pak.messagebus.core;
 
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import lombok.extern.slf4j.Slf4j;
-import org.pak.messagebus.core.error.ExceptionClassifier;
 import org.pak.messagebus.core.service.QueryService;
 import org.pak.messagebus.core.service.TransactionService;
 
@@ -19,19 +18,20 @@ class MessageProcessorStarter<T> {
     private final ExecutorService fixedThreadPoolExecutor;
     private final QueryService queryService;
     private final TransactionService transactionService;
-    private final ExceptionClassifier exceptionClassifier;
     private final SubscriberConfig<T> subscriberConfig;
+    private final int concurrency;
     private List<MessageProcessor<T>> messageProcessors;
     private final AtomicBoolean isRunning = new AtomicBoolean(false);
 
     MessageProcessorStarter(
             SubscriberConfig<T> subscriberConfig,
             QueryService queryService,
-            TransactionService transactionService,
-            ExceptionClassifier exceptionClassifier
+            TransactionService transactionService
     ) {
         this.subscriberConfig = subscriberConfig;
-        this.fixedThreadPoolExecutor = Executors.newFixedThreadPool(subscriberConfig.getConcurrency(),
+        concurrency = subscriberConfig.getProperties().getConcurrency();
+
+        this.fixedThreadPoolExecutor = Executors.newFixedThreadPool(concurrency,
                 r -> new ThreadFactoryBuilder()
                         .setNameFormat("message-processor-%d")
                         .setDaemon(true)
@@ -42,27 +42,27 @@ class MessageProcessorStarter<T> {
                         .newThread(r));
         this.queryService = queryService;
         this.transactionService = transactionService;
-        this.exceptionClassifier = exceptionClassifier;
     }
 
     public void start() {
         if (isRunning.compareAndSet(false, true)) {
             queryService.initMessageTable(subscriberConfig.getMessageName());
-            queryService.initSubscriptionTable(subscriberConfig.getMessageName(), subscriberConfig.getSubscriptionName());
+            queryService.initSubscriptionTable(subscriberConfig.getMessageName(),
+                    subscriberConfig.getSubscriptionName());
 
-            messageProcessors = IntStream.range(0, subscriberConfig.getConcurrency()).boxed()
+            messageProcessors = IntStream.range(0, concurrency).boxed()
                     .map(i -> {
                         var taskExecutor = new MessageProcessor<>(
                                 selectListenerStrategy(subscriberConfig),
                                 subscriberConfig.getMessageName(),
                                 subscriberConfig.getSubscriptionName(),
                                 subscriberConfig.getRetryablePolicy(),
+                                subscriberConfig.getNonRetryablePolicy(),
                                 subscriberConfig.getBlockingPolicy(),
-                                exceptionClassifier,
                                 queryService,
                                 transactionService,
                                 subscriberConfig.getTraceIdExtractor(),
-                                subscriberConfig.getMaxPollRecords());
+                                subscriberConfig.getProperties());
                         fixedThreadPoolExecutor.submit(taskExecutor::poolLoop);
                         return taskExecutor;
                     }).toList();

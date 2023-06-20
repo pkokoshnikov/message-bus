@@ -4,6 +4,7 @@ import org.pak.messagebus.core.*;
 import org.pak.messagebus.core.error.DuplicateKeyException;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 
 public interface QueryService {
@@ -19,5 +20,5 @@ public interface QueryService {
 
     <T> void completeMessage(SubscriptionName subscriptionName, MessageContainer<T> messageContainer);
 
-    <T> Object insertMessage(MessageName messageName, String uniqueKey, T message) throws DuplicateKeyException;
+    <T> Object insertMessage(MessageName messageName, String uniqueKey, Instant originatedTime, T message) throws DuplicateKeyException;
 }

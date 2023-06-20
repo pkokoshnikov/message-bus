@@ -3,7 +3,6 @@ package org.pak.messagebus.core;
 import lombok.AccessLevel;
 import lombok.Builder;
 import lombok.experimental.FieldDefaults;
-import org.pak.messagebus.core.error.ExceptionClassifier;
 import org.pak.messagebus.core.service.QueryService;
 import org.pak.messagebus.core.service.TransactionService;
 
@@ -15,15 +14,15 @@ class MessageProcessorFactory<T extends Message> {
     SubscriptionName subscriptionName;
     RetryablePolicy retryablePolicy;
     BlockingPolicy blockingPolicy;
-    ExceptionClassifier exceptionClassifier;
+    NonRetryablePolicy nonRetryablePolicy;
     QueryService queryService;
     TransactionService transactionService;
     TraceIdExtractor<T> traceIdExtractor;
-    Integer maxPollRecords;
+    SubscriberConfig.Properties properties;
 
     MessageProcessor<T> create() {
-        return new MessageProcessor<>(new MessageListenerStrategy<>(messageListener), messageName, subscriptionName, retryablePolicy,
-                blockingPolicy, exceptionClassifier, queryService, transactionService, traceIdExtractor,
-                maxPollRecords);
+        return new MessageProcessor<>(new MessageListenerStrategy<>(messageListener), messageName, subscriptionName,
+                retryablePolicy, nonRetryablePolicy, blockingPolicy, queryService, transactionService, traceIdExtractor,
+                properties);
     }
 }

@@ -1,7 +1,6 @@
 package org.pak.messagebus.core;
 
 import lombok.extern.slf4j.Slf4j;
-import org.pak.messagebus.core.error.ExceptionClassifier;
 import org.pak.messagebus.core.service.QueryService;
 import org.pak.messagebus.core.service.TransactionService;
 
@@ -11,16 +10,13 @@ import java.util.concurrent.ConcurrentHashMap;
 public class MessageBus {
     private final QueryService queryService;
     private final TransactionService transactionService;
-    private final ExceptionClassifier exceptionClassifier;
 
     public MessageBus(
             QueryService queryService,
-            TransactionService transactionService,
-            ExceptionClassifier exceptionClassifier
+            TransactionService transactionService
     ) {
         this.queryService = queryService;
         this.transactionService = transactionService;
-        this.exceptionClassifier = exceptionClassifier;
     }
 
     private final ConcurrentHashMap<String, MessageProcessorStarter<?>> messageProcessorStarters =
@@ -38,8 +34,7 @@ public class MessageBus {
     public <T extends Message> void registerSubscriber(SubscriberConfig<T> subscriberConfig) {
         messageProcessorStarters.computeIfAbsent(
                 subscriberConfig.getMessageName() + "_" + subscriberConfig.getSubscriptionName(), s -> {
-                    var starter = new MessageProcessorStarter<>(subscriberConfig, queryService, transactionService,
-                            exceptionClassifier);
+                    var starter = new MessageProcessorStarter<>(subscriberConfig, queryService, transactionService);
                     log.info("Register subscriber on message {} with subscription {}",
                             subscriberConfig.getMessageName(),
                             subscriberConfig.getSubscriptionName());

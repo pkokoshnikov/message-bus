@@ -5,8 +5,7 @@ import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.exception.ExceptionUtils;
 import org.pak.messagebus.core.*;
 import org.pak.messagebus.core.error.DuplicateKeyException;
-import org.pak.messagebus.core.error.IncorrectStateException;
-import org.pak.messagebus.core.error.PersistenceException;
+import org.pak.messagebus.core.error.NonRetrayablePersistenceException;
 import org.pak.messagebus.core.service.PersistenceService;
 import org.pak.messagebus.core.service.QueryService;
 import org.pak.messagebus.pg.jsonb.JsonbConverter;
@@ -15,7 +14,9 @@ import org.postgresql.util.PGobject;
 import java.math.BigInteger;
 import java.sql.SQLException;
 import java.time.Duration;
+import java.time.Instant;
 import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -46,6 +47,7 @@ public class PgQueryService implements QueryService {
                     key TEXT,
                     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     execute_after TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    originated_at TIMESTAMP WITH TIME ZONE,
                     payload JSONB NOT NULL);
                                 
                 CREATE INDEX IF NOT EXISTS ${messageTable}_created_at_idx ON ${schema}.${messageTable}(created_at);
@@ -110,13 +112,17 @@ public class PgQueryService implements QueryService {
     }
 
     @Override
-    public <T> Object insertMessage(MessageName messageName, String uniqueKey, T message) throws DuplicateKeyException {
+    public <T> Object insertMessage(MessageName messageName, String uniqueKey, Instant originatedTime, T message)
+            throws DuplicateKeyException {
         var query = queryCache.computeIfAbsent("insertMessage|" + messageName.name(), k -> formatter.execute("""
-                        INSERT INTO ${schema}.${messageTable} (created_at, execute_after, key, payload)
-                        VALUES (CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?, ?)""",
+                        INSERT INTO ${schema}.${messageTable} (created_at, execute_after, key, originated_at, payload)
+                        VALUES (CURRENT_TIMESTAMP,CURRENT_TIMESTAMP, ?, ?, ?)""",
                 Map.of("schema", schemaName.value(), "messageTable", messageTable(messageName))));
 
-        return persistenceService.insert(query, uniqueKey, jsonbConverter.toPGObject(message));
+        return persistenceService.insert(query,
+                uniqueKey,
+                OffsetDateTime.ofInstant(originatedTime, ZoneId.systemDefault()),
+                jsonbConverter.toPGObject(message));
     }
 
     @Override
@@ -126,13 +132,15 @@ public class PgQueryService implements QueryService {
 
         var query = queryCache.computeIfAbsent("selectMessages|" + subscriptionName.name(), k -> formatter.execute("""
                         SELECT s.id, s.message_id, s.attempt, s.error_message, s.stack_trace, s.created_at, s.updated_at,
-                            s.execute_after, e.payload
+                            s.execute_after, e.originated_at, e.payload
                         FROM ${schema}.${subscriptionTable} s JOIN ${schema}.${messageTable} e ON s.message_id = e.id
                         WHERE s.execute_after < CURRENT_TIMESTAMP
                         ORDER BY s.execute_after ASC
                         LIMIT ${maxPollRecords} FOR UPDATE OF s SKIP LOCKED""",
-                Map.of("schema", schemaName.value(), "subscriptionTable", subscriptionTable(subscriptionName),
-                        "messageTable", messageTable(messageName), "maxPollRecords", maxPollRecords.toString())));
+                Map.of("schema", schemaName.value(),
+                        "subscriptionTable", subscriptionTable(subscriptionName),
+                        "messageTable", messageTable(messageName),
+                        "maxPollRecords", maxPollRecords.toString())));
 
         log.debug("selectMessages query: {}", query);
         return persistenceService.query(query, rs -> {
@@ -143,11 +151,14 @@ public class PgQueryService implements QueryService {
                                 .orElse(null),
                         ofNullable(rs.getObject("created_at", OffsetDateTime.class)).map(OffsetDateTime::toInstant)
                                 .orElse(null),
+                        ofNullable(rs.getObject("originated_at", OffsetDateTime.class)).map(OffsetDateTime::toInstant)
+                                .orElse(null),
                         ofNullable(rs.getObject("updated_at", OffsetDateTime.class)).map(OffsetDateTime::toInstant)
-                                .orElse(null), jsonbConverter.toJsonb(rs.getObject("payload", PGobject.class)),
+                                .orElse(null),
+                        jsonbConverter.toJsonb(rs.getObject("payload", PGobject.class)),
                         rs.getString("error_message"), rs.getString("stack_trace"));
             } catch (SQLException e) {
-                throw new PersistenceException(e);
+                throw new NonRetrayablePersistenceException(e);
             }
         });
     }
@@ -217,8 +228,7 @@ public class PgQueryService implements QueryService {
 
     private void assertNonEmptyUpdate(int updated, String query, Object... args) {
         if (updated == 0) {
-            throw new IncorrectStateException("No records were updated by query %s for args %s".formatted(query,
-                    StringUtils.joinWith(", ", args)));
+            log.warn("No records were updated by query {} for args {}", query, StringUtils.joinWith(", ", args));
         }
     }
 }

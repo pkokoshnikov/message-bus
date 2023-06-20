@@ -1,13 +1,21 @@
 package org.pak.messagebus.core;
 
-import java.time.Duration;
+import lombok.NonNull;
 
-import static org.pak.messagebus.core.MessageProcessor.DEFAULT_BLOCKING_DURATION;
+import java.time.Duration;
+import java.time.temporal.ChronoUnit;
+
 
 public class SimpleBlockingPolicy implements BlockingPolicy {
 
     @Override
+    public boolean isBlocked(Exception exception) {
+        return false;
+    }
+
+    @Override
+    @NonNull
     public Duration apply(Exception exception) {
-        return DEFAULT_BLOCKING_DURATION;
+        return Duration.of(0, ChronoUnit.SECONDS);
     }
 }

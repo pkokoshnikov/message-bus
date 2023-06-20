@@ -18,6 +18,7 @@ public class MessageContainer<T> {
     Instant executeAfter;
     Instant created;
     Instant updated;
+    Instant originated;
     String errorMessage;
     String stackTrace;
 
@@ -28,6 +29,7 @@ public class MessageContainer<T> {
             Instant executeAfter,
             Instant created,
             Instant updated,
+            Instant originated,
             T message,
             String errorMessage,
             String stackTrace
@@ -38,6 +40,7 @@ public class MessageContainer<T> {
         this.executeAfter = executeAfter;
         this.created = created;
         this.updated = updated;
+        this.originated = originated;
         this.message = message;
         this.errorMessage = errorMessage;
         this.stackTrace = stackTrace;

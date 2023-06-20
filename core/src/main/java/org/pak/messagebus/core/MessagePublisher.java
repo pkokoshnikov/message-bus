@@ -5,6 +5,7 @@ import org.pak.messagebus.core.error.DuplicateKeyException;
 import org.pak.messagebus.core.service.QueryService;
 import org.slf4j.MDC;
 
+import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -29,12 +30,14 @@ class MessagePublisher<T> {
     }
 
     public void publish(T message) {
-        publish(UUID.randomUUID().toString(), message);
+        publish(UUID.randomUUID().toString(), Instant.now(), message);
     }
 
-    //TODO:add create time
+    //TODO: add create time
     //TODO: add message types: COMMAND, EVENT, QUERY, REPLY
-    public void publish(String uniqueKey, T message) {
+    //TODO: cleaner
+    //TODO: partitioning
+    public void publish(String uniqueKey, Instant originatedTime, T message) {
         var optionalTraceIdMDC = ofNullable(traceIdExtractor.extractTraceId(message))
                 .map(v -> MDC.putCloseable("traceId", v));
         var optionalMessageIdMDC = Optional.<MDC.MDCCloseable>empty();
@@ -43,7 +46,7 @@ class MessagePublisher<T> {
                 var ignoreKeyMDC = MDC.putCloseable("messageKey", uniqueKey)) {
             log.debug("Publish message {}", message);
 
-            var messageId = queryService.insertMessage(messageName, uniqueKey, message);
+            var messageId = queryService.insertMessage(messageName, uniqueKey, originatedTime, message);
 
             optionalMessageIdMDC = ofNullable(messageId).map(v -> MDC.putCloseable("messageId", v.toString()));
 
