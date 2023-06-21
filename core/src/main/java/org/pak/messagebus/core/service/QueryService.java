@@ -1,11 +1,8 @@
 package org.pak.messagebus.core.service;
 
-import org.apache.commons.lang3.tuple.Triple;
 import org.pak.messagebus.core.*;
-import org.pak.messagebus.core.error.DuplicateKeyException;
 
 import java.time.Duration;
-import java.time.Instant;
 import java.util.List;
 
 public interface QueryService {
@@ -21,6 +18,6 @@ public interface QueryService {
 
     <T> void completeMessage(SubscriptionName subscriptionName, MessageContainer<T> messageContainer);
 
-    <T> boolean insertMessage(MessageName messageName, MessageDetails<T> messageDetails);
-    <T> List<Boolean> insertBatchMessage(MessageName messageName, List<MessageDetails<T>> messages);
+    <T> boolean insertMessage(MessageName messageName, Message<T> message);
+    <T> List<Boolean> insertBatchMessage(MessageName messageName, List<Message<T>> messages);
 }

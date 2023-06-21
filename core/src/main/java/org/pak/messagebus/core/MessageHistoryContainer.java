@@ -8,7 +8,7 @@ import java.time.Instant;
 
 @Data
 @FieldDefaults(level = lombok.AccessLevel.PRIVATE)
-class MessageHistoryContainer<T extends Message> {
+class MessageHistoryContainer<T> {
     BigInteger id;
     T message;
     Integer attempt;

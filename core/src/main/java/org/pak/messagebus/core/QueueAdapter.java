@@ -4,15 +4,20 @@ import lombok.extern.slf4j.Slf4j;
 import org.pak.messagebus.core.service.QueryService;
 import org.pak.messagebus.core.service.TransactionService;
 
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
 @Slf4j
-public class MessageBus {
+public class QueueAdapter {
     private final QueryService queryService;
     private final TransactionService transactionService;
     private final MessageFactory messageFactory;
+    private final ConcurrentHashMap<String, MessageProcessorStarter<?>> messageProcessorStarters =
+            new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Class<?>, QueueMessagePublisher<?>> messagePublishers =
+            new ConcurrentHashMap<>();
 
-    public MessageBus(
+    public QueueAdapter(
             QueryService queryService,
             TransactionService transactionService,
             MessageFactory messageFactory
@@ -22,29 +27,14 @@ public class MessageBus {
         this.messageFactory = messageFactory;
     }
 
-    public MessageBus(
-            QueryService queryService,
-            TransactionService transactionService
-    ) {
-        this.queryService = queryService;
-        this.transactionService = transactionService;
-        this.messageFactory = new DefaultMessageFactory();
-    }
-
-    private final ConcurrentHashMap<String, MessageProcessorStarter<?>> messageProcessorStarters =
-            new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<Class<?>, MessagePublisher<?>> messagePublishers =
-            new ConcurrentHashMap<>();
-
     public <T> void registerPublisher(PublisherConfig<T> publisherConfig) {
         messagePublishers.computeIfAbsent(publisherConfig.getClazz(),
-                k -> new MessagePublisher<>(publisherConfig.getMessageName(),
+                k -> new QueueMessagePublisher<>(publisherConfig.getMessageName(),
                         publisherConfig.getTraceIdExtractor(),
-                        queryService,
-                        messageFactory));
+                        queryService, transactionService));
     }
 
-    public <T> void registerSubscriber(MessageListener<T> messageListener, SubscriberConfig<T> subscriberConfig) {
+    public <T> void registerSubscriber(SubscriberConfig<T> subscriberConfig) {
         messageProcessorStarters.computeIfAbsent(
                 subscriberConfig.getMessageName() + "_" + subscriberConfig.getSubscriptionName(), s -> {
                     var starter = new MessageProcessorStarter<>(subscriberConfig, queryService, transactionService,
@@ -56,8 +46,8 @@ public class MessageBus {
                 });
     }
 
-    public <T> void publish(T message) {
-        ((MessagePublisher<T>) messagePublishers.get(message.getClass())).publish(message);
+    public <T> void publish(Class<T> clazz, List<Message<T>> messages) {
+        ((QueueMessagePublisher<T>) messagePublishers.get(clazz)).publish(messages);
     }
 
     public void startSubscribers() {
@@ -67,4 +57,5 @@ public class MessageBus {
     public void stopSubscribers() {
         messageProcessorStarters.values().forEach(MessageProcessorStarter::stop);
     }
+
 }

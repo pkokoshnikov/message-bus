@@ -20,20 +20,22 @@ class MessageProcessorStarter<T> {
     private final TransactionService transactionService;
     private final SubscriberConfig<T> subscriberConfig;
     private final int concurrency;
+    private final MessageFactory messageFactory;
     private List<MessageProcessor<T>> messageProcessors;
     private final AtomicBoolean isRunning = new AtomicBoolean(false);
 
-    MessageProcessorStarter(
-            SubscriberConfig<T> subscriberConfig,
+    MessageProcessorStarter(SubscriberConfig<T> subscriberConfig,
             QueryService queryService,
-            TransactionService transactionService
+            TransactionService transactionService,
+            MessageFactory messageFactory
     ) {
         this.subscriberConfig = subscriberConfig;
-        concurrency = subscriberConfig.getProperties().getConcurrency();
+        this.concurrency = subscriberConfig.getProperties().getConcurrency();
+        this.messageFactory = messageFactory;
 
         this.fixedThreadPoolExecutor = Executors.newFixedThreadPool(concurrency,
                 r -> new ThreadFactoryBuilder()
-                        .setNameFormat("message-processor-%d")
+                        .setNameFormat("payload-processor-%d")
                         .setDaemon(true)
                         .setUncaughtExceptionHandler((t, e) -> {
                             log.error("Uncaught exception in thread {}", t.getName(), e);
@@ -53,7 +55,7 @@ class MessageProcessorStarter<T> {
             messageProcessors = IntStream.range(0, concurrency).boxed()
                     .map(i -> {
                         var taskExecutor = new MessageProcessor<>(
-                                selectListenerStrategy(subscriberConfig),
+                                subscriberConfig.getMessageListener(),
                                 subscriberConfig.getMessageName(),
                                 subscriberConfig.getSubscriptionName(),
                                 subscriberConfig.getRetryablePolicy(),
@@ -62,22 +64,13 @@ class MessageProcessorStarter<T> {
                                 queryService,
                                 transactionService,
                                 subscriberConfig.getTraceIdExtractor(),
+                                messageFactory,
                                 subscriberConfig.getProperties());
                         fixedThreadPoolExecutor.submit(taskExecutor::poolLoop);
                         return taskExecutor;
                     }).toList();
         } else {
             log.warn("Event processor starter should be started only once");
-        }
-    }
-
-    private ListenerStrategy<T> selectListenerStrategy(SubscriberConfig<T> subscriberConfig) {
-        if (subscriberConfig.getMessageListener() != null) {
-            return new MessageListenerStrategy<>(subscriberConfig.getMessageListener());
-        } else if (subscriberConfig.getBatchMessageContainerListener() != null) {
-            return new BatchContainerListenerStrategy<>(subscriberConfig.getBatchMessageContainerListener());
-        } else {
-            throw new IllegalStateException("Message listener or batch message listener should be set");
         }
     }
 

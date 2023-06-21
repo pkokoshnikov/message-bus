@@ -14,41 +14,44 @@ class MessagePublisher<T> {
     private final MessageName messageName;
     private final QueryService queryService;
     private final TraceIdExtractor<T> traceIdExtractor;
+    private final MessageFactory messageFactory;
 
     MessagePublisher(
             MessageName messageName,
             TraceIdExtractor<T> traceIdExtractor,
-            QueryService queryService
+            QueryService queryService,
+            MessageFactory messageFactory
     ) {
         this.messageName = messageName;
         this.queryService = queryService;
         this.traceIdExtractor = traceIdExtractor;
+        this.messageFactory = messageFactory;
 
         queryService.initMessageTable(messageName);
     }
 
     public void publish(T message) {
-        publish(new MessageDetails<>(UUID.randomUUID().toString(), Instant.now(), message));
+        publish(messageFactory.createMessage(UUID.randomUUID().toString(), Instant.now(), message));
     }
 
     //TODO: add create time
-    //TODO: add message types: COMMAND, EVENT, QUERY, REPLY
+    //TODO: add payload types: COMMAND, EVENT, QUERY, REPLY
     //TODO: cleaner
     //TODO: partitioning
-    public void publish(MessageDetails<T> messageDetails) {
-        var optionalTraceIdMDC = ofNullable(traceIdExtractor.extractTraceId(messageDetails.getMessage()))
+    public void publish(Message<T> message) {
+        var optionalTraceIdMDC = ofNullable(traceIdExtractor.extractTraceId(message.payload()))
                 .map(v -> MDC.putCloseable("traceId", v));
 
         try (var ignoredCollectionMDC = MDC.putCloseable("messageName", messageName.name());
-                var ignoreKeyMDC = MDC.putCloseable("messageKey", messageDetails.getKey())) {
-            log.debug("Publish message {}", messageDetails.getMessage());
+                var ignoreKeyMDC = MDC.putCloseable("messageKey", message.key())) {
+            log.debug("Publish payload {}", message.payload());
 
-            var inserted = queryService.insertMessage(messageName, messageDetails);
+            var inserted = queryService.insertMessage(messageName, message);
 
             if (inserted) {
-                log.info("Published message");
+                log.info("Published payload");
             } else {
-                log.warn("Duplicate key {}, {}", messageDetails.getKey(), messageDetails.getOriginatedTime());
+                log.warn("Duplicate key {}, {}", message.key(), message.originatedTime());
             }
         } finally {
             optionalTraceIdMDC.ifPresent(MDC.MDCCloseable::close);

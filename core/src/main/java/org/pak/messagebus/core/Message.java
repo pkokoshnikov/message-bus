@@ -1,5 +1,11 @@
 package org.pak.messagebus.core;
 
-public interface Message {
-    MessageName messageName();
+import java.time.Instant;
+
+public interface Message<T> {
+    String key();
+
+    Instant originatedTime();
+
+    T payload();
 }

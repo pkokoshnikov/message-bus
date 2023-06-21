@@ -2,7 +2,10 @@ package org.pak.messagebus.core;
 
 import lombok.NonNull;
 import lombok.extern.slf4j.Slf4j;
-import org.pak.messagebus.core.error.*;
+import org.pak.messagebus.core.error.NonRetrayablePersistenceException;
+import org.pak.messagebus.core.error.PersistenceException;
+import org.pak.messagebus.core.error.RetrayablePersistenceException;
+import org.pak.messagebus.core.error.SerializerException;
 import org.pak.messagebus.core.service.QueryService;
 import org.pak.messagebus.core.service.TransactionService;
 import org.slf4j.MDC;
@@ -11,7 +14,6 @@ import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.Supplier;
 
 import static java.util.Optional.ofNullable;
 
@@ -19,7 +21,6 @@ import static java.util.Optional.ofNullable;
 class MessageProcessor<T> {
 
     private final String id = UUID.randomUUID().toString();
-    private final ListenerStrategy<T> listenerStrategy;
     private final RetryablePolicy retryablePolicy;
     private final NonRetryablePolicy nonRetryablePolicy;
     private final BlockingPolicy blockingPolicy;
@@ -28,14 +29,16 @@ class MessageProcessor<T> {
     private final SubscriptionName subscriptionName;
     private final TransactionService transactionService;
     private final TraceIdExtractor<T> traceIdExtractor;
+    private final MessageListener<T> messageListener;
     private Duration pause = null;
     private final Duration unpredictedExceptionPause;
+    private final MessageFactory messageFactory;
     private final Integer maxPollRecords;
     private final Duration persistenceExceptionPause;
     private final AtomicBoolean isRunning = new AtomicBoolean(false);
 
     MessageProcessor(
-            @NonNull ListenerStrategy<T> listenerStrategy,
+            @NonNull MessageListener<T> messageListener,
             @NonNull MessageName messageName,
             @NonNull SubscriptionName subscriptionName,
             @NonNull RetryablePolicy retryablePolicy,
@@ -44,9 +47,10 @@ class MessageProcessor<T> {
             @NonNull QueryService queryService,
             @NonNull TransactionService transactionService,
             @NonNull TraceIdExtractor<T> traceIdExtractor,
+            @NonNull MessageFactory messageFactory,
             @NonNull SubscriberConfig.Properties properties
     ) {
-        this.listenerStrategy = listenerStrategy;
+        this.messageListener = messageListener;
         this.retryablePolicy = retryablePolicy;
         this.nonRetryablePolicy = nonRetryablePolicy;
         this.blockingPolicy = blockingPolicy;
@@ -55,6 +59,7 @@ class MessageProcessor<T> {
         this.subscriptionName = subscriptionName;
         this.transactionService = transactionService;
         this.traceIdExtractor = traceIdExtractor;
+        this.messageFactory = messageFactory;
         this.maxPollRecords = properties.getMaxPollRecords();
         this.persistenceExceptionPause = properties.getPersistenceExceptionPause();
         this.unpredictedExceptionPause = properties.getUnpredictedExceptionPause();
@@ -121,8 +126,6 @@ class MessageProcessor<T> {
             return false;
         }
 
-        listenerStrategy.onStartBatch(messageContainerList.size());
-
         for (var messageContainer : messageContainerList) {
             var optionalTraceIdMDC = ofNullable(traceIdExtractor.extractTraceId(messageContainer.getMessage()))
                     .map(v -> MDC.putCloseable("traceId", v));
@@ -131,7 +134,9 @@ class MessageProcessor<T> {
                     var ignoreKeyMDC = MDC.putCloseable("messageKey", messageContainer.getKey())) {
                 try {
                     log.debug("Message handling started");
-                    listenerStrategy.handle(messageContainer);
+                    messageListener.handle(messageFactory.createMessage(messageContainer.getKey(),
+                            messageContainer.getOriginatedTime(),
+                            messageContainer.getMessage()));
 
                     queryService.completeMessage(subscriptionName, messageContainer);
 
@@ -152,7 +157,6 @@ class MessageProcessor<T> {
             }
         }
 
-        listenerStrategy.onEndBatch();
         return true;
     }
 
@@ -182,7 +186,7 @@ class MessageProcessor<T> {
 
     public void stop() {
         if (isRunning.compareAndSet(true, false)) {
-            log.info("Prepare to stop message processor");
+            log.info("Prepare to stop payload processor");
         } else {
             log.warn("Event processor should be stopped only once");
         }

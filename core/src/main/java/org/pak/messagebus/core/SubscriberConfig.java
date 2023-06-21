@@ -7,7 +7,6 @@ import lombok.experimental.FieldDefaults;
 
 import java.time.Duration;
 import java.time.temporal.ChronoUnit;
-import java.util.Map;
 
 @Builder
 @FieldDefaults(makeFinal = true, level = lombok.AccessLevel.PRIVATE)
@@ -17,8 +16,8 @@ public class SubscriberConfig<T> {
     MessageName messageName;
     @NonNull
     SubscriptionName subscriptionName;
+    @NonNull
     MessageListener<T> messageListener;
-    BatchMessageContainerListener<T> batchMessageContainerListener;
     @Builder.Default
     BlockingPolicy blockingPolicy = new SimpleBlockingPolicy();
     @Builder.Default

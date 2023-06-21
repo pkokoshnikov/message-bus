@@ -1,11 +1,8 @@
 package org.pak.messagebus.pg;
 
 import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.exception.ExceptionUtils;
-import org.apache.commons.lang3.tuple.Triple;
 import org.pak.messagebus.core.*;
-import org.pak.messagebus.core.error.DuplicateKeyException;
 import org.pak.messagebus.core.error.NonRetrayablePersistenceException;
 import org.pak.messagebus.core.service.PersistenceService;
 import org.pak.messagebus.core.service.QueryService;
@@ -13,17 +10,14 @@ import org.pak.messagebus.pg.jsonb.JsonbConverter;
 import org.postgresql.util.PGobject;
 
 import java.math.BigInteger;
-import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.time.Duration;
-import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.Supplier;
 
 import static java.util.Optional.ofNullable;
 
@@ -116,29 +110,30 @@ public class PgQueryService implements QueryService {
     }
 
     @Override
-    public <T> boolean insertMessage(MessageName messageName, MessageDetails<T> messageDetails) {
+    public <T> boolean insertMessage(MessageName messageName, Message<T> message) {
         var query = queryCache.computeIfAbsent("insertMessage|" + messageName.name(), k -> formatter.execute("""
                         INSERT INTO ${schema}.${messageTable} (created_at, execute_after, key, originated_at, payload)
                         VALUES (CURRENT_TIMESTAMP,CURRENT_TIMESTAMP, ?, ?, ?) ON CONFLICT (key) DO NOTHING""",
                 Map.of("schema", schemaName.value(), "messageTable", messageTable(messageName))));
 
         return persistenceService.insert(query,
-                messageDetails.getKey(),
-                OffsetDateTime.ofInstant(messageDetails.getOriginatedTime(), ZoneId.systemDefault()),
-                jsonbConverter.toPGObject(messageDetails.getMessage())) > 0;
+                message.key(),
+                OffsetDateTime.ofInstant(message.originatedTime(), ZoneId.systemDefault()),
+                jsonbConverter.toPGObject(message.payload())) > 0;
 
     }
 
     @Override
-    public <T> List<Boolean> insertBatchMessage(MessageName messageName, List<MessageDetails<T>> messages) {
+    public <T> List<Boolean> insertBatchMessage(MessageName messageName, List<Message<T>> messages) {
         var query = queryCache.computeIfAbsent("insertBatchMessage|" + messageName.name(), k -> formatter.execute("""
                         INSERT INTO ${schema}.${messageTable} (created_at, execute_after, key, originated_at, payload)
                         VALUES (CURRENT_TIMESTAMP,CURRENT_TIMESTAMP, ?, ?, ?) ON CONFLICT (key) DO NOTHING""",
                 Map.of("schema", schemaName.value(), "messageTable", messageTable(messageName))));
 
-        var args = messages.stream().map(t -> new Object[]{t.getKey(),
-                        OffsetDateTime.ofInstant(t.getOriginatedTime(), ZoneId.systemDefault()),
-                        t.getMessage()})
+        var args = messages.stream()
+                .map(t -> new Object[]{t.key(),
+                        OffsetDateTime.ofInstant(t.originatedTime(), ZoneId.systemDefault()),
+                        jsonbConverter.toPGObject(t.payload())})
                 .toList();
 
         return Arrays.stream(persistenceService.batchInsert(query, args)).mapToObj(i -> i > 0).toList();
@@ -150,8 +145,8 @@ public class PgQueryService implements QueryService {
     ) {
         var query = queryCache.computeIfAbsent("selectMessages|" + subscriptionName.name(), k -> formatter.execute("""
                         SELECT s.id, s.message_id, s.attempt, s.error_message, s.stack_trace, s.created_at, s.updated_at,
-                            s.execute_after, e.originated_at, e.payload
-                        FROM ${schema}.${subscriptionTable} s JOIN ${schema}.${messageTable} e ON s.message_id = e.id
+                            s.execute_after, m.originated_at, m.key, m.payload
+                        FROM ${schema}.${subscriptionTable} s JOIN ${schema}.${messageTable} m ON s.message_id = m.id
                         WHERE s.execute_after < CURRENT_TIMESTAMP
                         ORDER BY s.execute_after ASC
                         LIMIT ${maxPollRecords} FOR UPDATE OF s SKIP LOCKED""",
@@ -160,11 +155,12 @@ public class PgQueryService implements QueryService {
                         "messageTable", messageTable(messageName),
                         "maxPollRecords", maxPollRecords.toString())));
 
-
         return persistenceService.query(query, rs -> {
             try {
                 return new MessageContainer<>(rs.getObject("id", BigInteger.class),
-                        rs.getObject("message_id", BigInteger.class), rs.getInt("attempt"),
+                        rs.getObject("message_id", BigInteger.class),
+                        rs.getString("key"),
+                        rs.getInt("attempt"),
                         ofNullable(rs.getObject("execute_after", OffsetDateTime.class)).map(OffsetDateTime::toInstant)
                                 .orElse(null),
                         ofNullable(rs.getObject("created_at", OffsetDateTime.class)).map(OffsetDateTime::toInstant)

@@ -53,7 +53,7 @@ class MessageBusTest {
         transactionTemplate = new TransactionTemplate(new JdbcTransactionManager(dataSource) {});
         messageBus = new MessageBus(
                 new PgQueryService(new SpringPersistenceService(jdbcTemplate), SCHEMA_NAME, jsonbConverter),
-                new SpringTransactionService(transactionTemplate));
+                new SpringTransactionService(transactionTemplate), new DefaultMessageFactory());
     }
 
     @AfterEach
@@ -72,23 +72,23 @@ class MessageBusTest {
         var reference1 = new AtomicReference<TestMessage>();
         var reference2 = new AtomicReference<TestMessage>();
 
-        messageBus.registerSubscriber(SubscriberConfig.<TestMessage>builder()
-                .messageName(MESSAGE_NAME)
-                .subscriptionName(SUBSCRIPTION_NAME_1)
-                .messageListener(message -> {
-                    reference1.set(message);
+        messageBus.registerSubscriber(message -> {
+                    reference1.set(message.payload());
                     countDownLatch.countDown();
-                })
-                .build());
+                },
+                SubscriberConfig.<TestMessage>builder()
+                        .messageName(MESSAGE_NAME)
+                        .subscriptionName(SUBSCRIPTION_NAME_1)
+                        .build());
 
-        messageBus.registerSubscriber(SubscriberConfig.<TestMessage>builder()
-                .messageName(MESSAGE_NAME)
-                .subscriptionName(SUBSCRIPTION_NAME_2)
-                .messageListener(message -> {
-                    reference2.set(message);
+        messageBus.registerSubscriber(message -> {
+                    reference2.set(message.payload());
                     countDownLatch.countDown();
-                })
-                .build());
+                },
+                SubscriberConfig.<TestMessage>builder()
+                        .messageName(MESSAGE_NAME)
+                        .subscriptionName(SUBSCRIPTION_NAME_2)
+                        .build());
 
         messageBus.startSubscribers();
         TestMessage testMessage = new TestMessage("test-name");
@@ -113,14 +113,14 @@ class MessageBusTest {
 
         var countDownLatch = new CountDownLatch(100_000);
 
-        messageBus.registerSubscriber(SubscriberConfig.<TestMessage>builder()
-                .messageName(MESSAGE_NAME)
-                .subscriptionName(SUBSCRIPTION_NAME_1)
-                .messageListener(message -> countDownLatch.countDown())
-                .properties(SubscriberConfig.Properties.builder()
-                        .concurrency(50)
-                        .build())
-                .build());
+        messageBus.registerSubscriber(message -> countDownLatch.countDown(),
+                SubscriberConfig.<TestMessage>builder()
+                        .messageName(MESSAGE_NAME)
+                        .subscriptionName(SUBSCRIPTION_NAME_1)
+                        .properties(SubscriberConfig.Properties.builder()
+                                .concurrency(50)
+                                .build())
+                        .build());
 
         messageBus.startSubscribers();
 

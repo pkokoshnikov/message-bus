@@ -7,13 +7,8 @@ import lombok.NoArgsConstructor;
 @AllArgsConstructor
 @NoArgsConstructor
 @Data
-public class TestMessage implements Message {
+public class TestMessage  {
     public static MessageName MESSAGE_NAME = new MessageName("test-message");
 
     private String name;
-
-    @Override
-    public MessageName messageName() {
-        return MESSAGE_NAME;
-    }
 }

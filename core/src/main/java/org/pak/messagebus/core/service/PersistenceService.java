@@ -1,7 +1,5 @@
 package org.pak.messagebus.core.service;
 
-import org.pak.messagebus.core.error.DuplicateKeyException;
-
 import java.sql.ResultSet;
 import java.util.List;
 import java.util.function.Function;

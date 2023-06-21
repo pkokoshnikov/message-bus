@@ -46,8 +46,9 @@ class MessageProcessorTest {
     static SubscriptionName TEST_SUBSCRIPTION_TYPE = new SubscriptionName("test-subscription");
     static SchemaName TEST_SCHEMA = new SchemaName("public");
     static String TEST_VALUE = "test-value";
-    static String TEST_EXCEPTION_MESSAGE = "test-exception-message";
+    static String TEST_EXCEPTION_MESSAGE = "test-exception-payload";
     MessagePublisher<TestMessage> messagePublisher;
+    QueueMessagePublisher<TestMessage> queueMessagePublisher;
     PgQueryService pgQueryService;
     StringFormatter formatter = new StringFormatter();
 
@@ -88,17 +89,22 @@ class MessageProcessorTest {
         jsonbConverter = new JsonbConverter();
         jsonbConverter.registerType(TestMessage.MESSAGE_NAME.name(), TestMessage.class);
 
-        springTransactionService =
-                new SpringTransactionService(new TransactionTemplate(new JdbcTransactionManager(dataSource) {}));
+        springTransactionService = new SpringTransactionService(new TransactionTemplate(
+                new JdbcTransactionManager(dataSource) {}));
+
         pgQueryService = new PgQueryService(new SpringPersistenceService(jdbcTemplate), TEST_SCHEMA, jsonbConverter);
 
-        messagePublisher =
-                new MessagePublisher<>(TestMessage.MESSAGE_NAME, TestMessage::getName, pgQueryService);
+        messagePublisher = new MessagePublisher<>(TestMessage.MESSAGE_NAME, TestMessage::getName, pgQueryService,
+                new DefaultMessageFactory());
+
+        queueMessagePublisher = new QueueMessagePublisher<>(TestMessage.MESSAGE_NAME, TestMessage::getName,
+                pgQueryService, springTransactionService);
 
         pgQueryService.initMessageTable(TestMessage.MESSAGE_NAME);
         pgQueryService.initSubscriptionTable(TestMessage.MESSAGE_NAME, TEST_SUBSCRIPTION_TYPE);
 
         messageProcessorFactory = MessageProcessorFactory.<TestMessage>builder()
+                .messageFactory(new DefaultMessageFactory())
                 .messageListener(testMessage -> log.info("Handle testMessage: {}", testMessage))
                 .queryService(pgQueryService)
                 .transactionService(springTransactionService)
@@ -136,12 +142,45 @@ class MessageProcessorTest {
 
         assertThat(testMessageContainer.getMessage()).isEqualTo(testMessage);
         assertThat(testMessageContainer.getCreated()).isNotNull();
-        assertThat(testMessageContainer.getOriginated()).isNotNull();
+        assertThat(testMessageContainer.getOriginatedTime()).isNotNull();
         assertThat(testMessageContainer.getUpdated()).isNull();
         assertThat(testMessageContainer.getExecuteAfter()).isNotNull();
         assertThat(testMessageContainer.getAttempt()).isEqualTo(0);
         assertThat(testMessageContainer.getErrorMessage()).isNull();
         assertThat(testMessageContainer.getStackTrace()).isNull();
+    }
+
+    @Test
+    void testSubmitBatchMessages() {
+        var testMessage1 = new DefaultMessage<>(UUID.randomUUID().toString(), Instant.now(),
+                new TestMessage(TEST_VALUE + "_1"));
+        var testMessage2 = new DefaultMessage<>(UUID.randomUUID().toString(), Instant.now(),
+                new TestMessage(TEST_VALUE + "_2"));
+        var testMessage3 = new DefaultMessage<>(UUID.randomUUID().toString(), Instant.now(),
+                new TestMessage(TEST_VALUE + "_3"));
+
+        List<Message<TestMessage>> messages = List.of(testMessage1, testMessage2, testMessage3);
+        queueMessagePublisher.publish(messages);
+
+        var testMessagesContainers = selectTestMessages();
+
+        assertThat(testMessagesContainers).hasSize(3);
+
+        messages.forEach(message -> {
+            var testMessageContainer = testMessagesContainers.stream()
+                    .filter(tmc -> tmc.getKey().equals(message.key()))
+                    .findFirst()
+                    .get();
+
+            assertThat(testMessageContainer.getMessage()).isEqualTo(message.payload());
+            assertThat(testMessageContainer.getCreated()).isNotNull();
+            assertThat(testMessageContainer.getOriginatedTime()).isEqualTo(message.originatedTime());
+            assertThat(testMessageContainer.getUpdated()).isNull();
+            assertThat(testMessageContainer.getExecuteAfter()).isNotNull();
+            assertThat(testMessageContainer.getAttempt()).isEqualTo(0);
+            assertThat(testMessageContainer.getErrorMessage()).isNull();
+            assertThat(testMessageContainer.getStackTrace()).isNull();
+        });
     }
 
     @Test
@@ -301,8 +340,8 @@ class MessageProcessorTest {
         TestMessage testMessage = new TestMessage(TEST_VALUE);
         var key = UUID.randomUUID().toString();
         var originatedTime = Instant.now();
-        messagePublisher.publish(new MessageDetails<>(key, originatedTime, testMessage));
-        messagePublisher.publish(new MessageDetails<>(key, originatedTime, testMessage));
+        messagePublisher.publish(new DefaultMessage<>(key, originatedTime, testMessage));
+        messagePublisher.publish(new DefaultMessage<>(key, originatedTime, testMessage));
 
         var testMessageContainer = hasSize1AndGetFirst(selectTestMessages());
 
@@ -376,7 +415,7 @@ class MessageProcessorTest {
     List<MessageContainer<TestMessage>> selectTestMessages() {
         var query = formatter.execute("""
                         SELECT s.id, s.message_id, s.attempt, s.error_message, s.stack_trace, s.created_at, s.updated_at,
-                            s.execute_after, m.payload, m.originated_at
+                            s.execute_after, m.payload, m.originated_at, m.key
                         FROM ${schema}.${subscriptionTable} s JOIN ${schema}.${messageTable} m ON s.message_id = m.id""",
                 Map.of("schema", TEST_SCHEMA.value(),
                         "subscriptionTable", "test_subscription",
@@ -386,6 +425,7 @@ class MessageProcessorTest {
                 (rs, rowNum) -> new MessageContainer<>(
                         rs.getObject("id", BigInteger.class),
                         rs.getObject("message_id", BigInteger.class),
+                        rs.getString("key"),
                         rs.getInt("attempt"),
                         ofNullable(rs.getObject("execute_after", OffsetDateTime.class))
                                 .map(OffsetDateTime::toInstant).orElse(null),
@@ -403,7 +443,7 @@ class MessageProcessorTest {
     List<MessageHistoryContainer<TestMessage>> selectTestMessagesFromHistory() {
         var query = formatter.execute("""
                         SELECT s.id, s.message_id, s.attempt, s.status, s.error_message, s.stack_trace, s.created_at, m.payload
-                        FROM ${schema}.${subscriptionTableHistory} s JOIN ${messageTable} m ON s.message_id = m.id""",
+                        FROM ${schema}.${subscriptionTableHistory} s JOIN ${schema}.${messageTable} m ON s.message_id = m.id""",
                 Map.of("schema", TEST_SCHEMA.value(),
                         "subscriptionTableHistory", "test_subscription_history",
                         "messageTable", "test_message"));

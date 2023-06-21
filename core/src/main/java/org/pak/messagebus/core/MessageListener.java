@@ -1,5 +1,5 @@
 package org.pak.messagebus.core;
 
 public interface MessageListener<T> {
-    void handle(T message);
+    void handle(Message<T> message);
 }
