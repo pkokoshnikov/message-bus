@@ -44,7 +44,7 @@ public class MessageBus {
                         messageFactory));
     }
 
-    public <T> void registerSubscriber(MessageListener<T> messageListener, SubscriberConfig<T> subscriberConfig) {
+    public <T> void registerSubscriber(SubscriberConfig<T> subscriberConfig) {
         messageProcessorStarters.computeIfAbsent(
                 subscriberConfig.getMessageName() + "_" + subscriberConfig.getSubscriptionName(), s -> {
                     var starter = new MessageProcessorStarter<>(subscriberConfig, queryService, transactionService,

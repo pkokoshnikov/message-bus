@@ -29,6 +29,7 @@ import java.math.BigInteger;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -43,7 +44,7 @@ import static org.pak.messagebus.core.Status.PROCESSED;
 @Testcontainers
 @Slf4j
 class MessageProcessorTest {
-    static SubscriptionName TEST_SUBSCRIPTION_TYPE = new SubscriptionName("test-subscription");
+    static SubscriptionName TEST_SUBSCRIPTION_NAME = new SubscriptionName("test-subscription");
     static SchemaName TEST_SCHEMA = new SchemaName("public");
     static String TEST_VALUE = "test-value";
     static String TEST_EXCEPTION_MESSAGE = "test-exception-payload";
@@ -101,7 +102,13 @@ class MessageProcessorTest {
                 pgQueryService, springTransactionService);
 
         pgQueryService.initMessageTable(TestMessage.MESSAGE_NAME);
-        pgQueryService.initSubscriptionTable(TestMessage.MESSAGE_NAME, TEST_SUBSCRIPTION_TYPE);
+        pgQueryService.initSubscriptionTable(TestMessage.MESSAGE_NAME, TEST_SUBSCRIPTION_NAME);
+
+        var now = Instant.now().truncatedTo(ChronoUnit.DAYS);
+        pgQueryService.createMessagePartition(TestMessage.MESSAGE_NAME, now);
+        pgQueryService.createMessagePartition(TestMessage.MESSAGE_NAME, now.plus(Duration.ofDays(1)));
+        pgQueryService.createHistoryPartition(TEST_SUBSCRIPTION_NAME, now);
+        pgQueryService.createHistoryPartition(TEST_SUBSCRIPTION_NAME, now.plus(Duration.ofDays(1)));
 
         messageProcessorFactory = MessageProcessorFactory.<TestMessage>builder()
                 .messageFactory(new DefaultMessageFactory())
@@ -112,7 +119,7 @@ class MessageProcessorTest {
                 .blockingPolicy(new SimpleBlockingPolicy())
                 .nonRetryablePolicy(new SimpleNonRetryablePolicy())
                 .messageName(TestMessage.MESSAGE_NAME)
-                .subscriptionName(TEST_SUBSCRIPTION_TYPE)
+                .subscriptionName(TEST_SUBSCRIPTION_NAME)
                 .traceIdExtractor(object -> null)
                 .properties(SubscriberConfig.Properties.builder().build());
     }
@@ -140,7 +147,7 @@ class MessageProcessorTest {
 
         var testMessageContainer = hasSize1AndGetFirst(selectTestMessages());
 
-        assertThat(testMessageContainer.getMessage()).isEqualTo(testMessage);
+        assertThat(testMessageContainer.getPayload()).isEqualTo(testMessage);
         assertThat(testMessageContainer.getCreated()).isNotNull();
         assertThat(testMessageContainer.getOriginatedTime()).isNotNull();
         assertThat(testMessageContainer.getUpdated()).isNull();
@@ -161,6 +168,7 @@ class MessageProcessorTest {
 
         List<Message<TestMessage>> messages = List.of(testMessage1, testMessage2, testMessage3);
         queueMessagePublisher.publish(messages);
+        queueMessagePublisher.publish(messages);//check duplicates
 
         var testMessagesContainers = selectTestMessages();
 
@@ -172,7 +180,7 @@ class MessageProcessorTest {
                     .findFirst()
                     .get();
 
-            assertThat(testMessageContainer.getMessage()).isEqualTo(message.payload());
+            assertThat(testMessageContainer.getPayload()).isEqualTo(message.payload());
             assertThat(testMessageContainer.getCreated()).isNotNull();
             assertThat(testMessageContainer.getOriginatedTime()).isEqualTo(message.originatedTime());
             assertThat(testMessageContainer.getUpdated()).isNull();
@@ -345,7 +353,7 @@ class MessageProcessorTest {
 
         var testMessageContainer = hasSize1AndGetFirst(selectTestMessages());
 
-        assertThat(testMessageContainer.getMessage()).isEqualTo(testMessage);
+        assertThat(testMessageContainer.getPayload()).isEqualTo(testMessage);
         assertThat(testMessageContainer.getCreated()).isNotNull();
         assertThat(testMessageContainer.getUpdated()).isNull();
         assertThat(testMessageContainer.getExecuteAfter()).isNotNull();
@@ -393,7 +401,7 @@ class MessageProcessorTest {
 
         var testMessageContainer = hasSize1AndGetFirst(selectTestMessages());
 
-        assertThat(testMessageContainer.getMessage()).isEqualTo(testMessage);
+        assertThat(testMessageContainer.getPayload()).isEqualTo(testMessage);
         assertThat(testMessageContainer.getCreated()).isNotNull();
         assertThat(testMessageContainer.getUpdated()).isNull();
         assertThat(testMessageContainer.getExecuteAfter()).isNotNull();

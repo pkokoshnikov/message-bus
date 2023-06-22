@@ -68,9 +68,9 @@ public class SpringPersistenceService implements PersistenceService {
 
     private void classifyException(Exception e) {
         if (BadSqlGrammarException.class.isAssignableFrom(e.getClass())) {
-            throw new NonRetrayablePersistenceException(e);
+            throw new NonRetrayablePersistenceException(e, e.getCause());
         } else {
-            throw new RetrayablePersistenceException(e);
+            throw new RetrayablePersistenceException(e, e.getCause());
         }
     }
 

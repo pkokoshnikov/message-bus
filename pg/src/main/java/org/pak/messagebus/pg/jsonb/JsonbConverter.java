@@ -80,7 +80,7 @@ public class JsonbConverter {
 
             return (T) jsonObject;
         } catch (SQLException e) {
-            throw new RetrayablePersistenceException(e);
+            throw new RetrayablePersistenceException(e, e.getCause());
         } catch (JsonProcessingException e) {
             throw new SerializerException(e);
         }

@@ -12,7 +12,7 @@ public class MessageContainer<T> {
     BigInteger id;
     BigInteger messageId;
     String key;
-    T message;
+    T payload;
     Integer attempt;
     Instant executeAfter;
     Instant created;
@@ -30,7 +30,7 @@ public class MessageContainer<T> {
             Instant created,
             Instant updated,
             Instant originatedTime,
-            T message,
+            T payload,
             String errorMessage,
             String stackTrace
     ) {
@@ -42,7 +42,7 @@ public class MessageContainer<T> {
         this.created = created;
         this.updated = updated;
         this.originatedTime = originatedTime;
-        this.message = message;
+        this.payload = payload;
         this.errorMessage = errorMessage;
         this.stackTrace = stackTrace;
     }

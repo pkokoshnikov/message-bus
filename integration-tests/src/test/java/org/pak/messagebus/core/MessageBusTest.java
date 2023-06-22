@@ -72,23 +72,23 @@ class MessageBusTest {
         var reference1 = new AtomicReference<TestMessage>();
         var reference2 = new AtomicReference<TestMessage>();
 
-        messageBus.registerSubscriber(message -> {
+        messageBus.registerSubscriber(SubscriberConfig.<TestMessage>builder()
+                .messageListener(message -> {
                     reference1.set(message.payload());
                     countDownLatch.countDown();
-                },
-                SubscriberConfig.<TestMessage>builder()
-                        .messageName(MESSAGE_NAME)
-                        .subscriptionName(SUBSCRIPTION_NAME_1)
-                        .build());
+                })
+                .messageName(MESSAGE_NAME)
+                .subscriptionName(SUBSCRIPTION_NAME_1)
+                .build());
 
-        messageBus.registerSubscriber(message -> {
+        messageBus.registerSubscriber(SubscriberConfig.<TestMessage>builder()
+                .messageListener(message -> {
                     reference2.set(message.payload());
                     countDownLatch.countDown();
-                },
-                SubscriberConfig.<TestMessage>builder()
-                        .messageName(MESSAGE_NAME)
-                        .subscriptionName(SUBSCRIPTION_NAME_2)
-                        .build());
+                })
+                .messageName(MESSAGE_NAME)
+                .subscriptionName(SUBSCRIPTION_NAME_2)
+                .build());
 
         messageBus.startSubscribers();
         TestMessage testMessage = new TestMessage("test-name");
@@ -113,14 +113,14 @@ class MessageBusTest {
 
         var countDownLatch = new CountDownLatch(100_000);
 
-        messageBus.registerSubscriber(message -> countDownLatch.countDown(),
-                SubscriberConfig.<TestMessage>builder()
-                        .messageName(MESSAGE_NAME)
-                        .subscriptionName(SUBSCRIPTION_NAME_1)
-                        .properties(SubscriberConfig.Properties.builder()
-                                .concurrency(50)
-                                .build())
-                        .build());
+        messageBus.registerSubscriber(SubscriberConfig.<TestMessage>builder()
+                .messageListener(message -> countDownLatch.countDown())
+                .messageName(MESSAGE_NAME)
+                .subscriptionName(SUBSCRIPTION_NAME_1)
+                .properties(SubscriberConfig.Properties.builder()
+                        .concurrency(50)
+                        .build())
+                .build());
 
         messageBus.startSubscribers();
 

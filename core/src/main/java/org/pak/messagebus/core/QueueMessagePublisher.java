@@ -1,6 +1,7 @@
 package org.pak.messagebus.core;
 
 import lombok.extern.slf4j.Slf4j;
+import org.pak.messagebus.core.error.MissingPartitionException;
 import org.pak.messagebus.core.service.QueryService;
 import org.pak.messagebus.core.service.TransactionService;
 import org.slf4j.MDC;
@@ -42,24 +43,30 @@ class QueueMessagePublisher<T> {
                     optionalTraceIdMDC.ifPresent(MDC.MDCCloseable::close);
                 });
             }
-
-            var inserted = transactionService.inTransaction(() ->
-                    queryService.insertBatchMessage(messageName, messages));
-
-            for (int i = 0; i < inserted.size(); i++) {
-                Message<T> message = messages.get(i);
-                var optionalTraceIdMDC = ofNullable(traceIdExtractor.extractTraceId(message.payload()))
-                        .map(v -> MDC.putCloseable("traceId", v));
-                try (var ignoreKeyMDC = MDC.putCloseable("messageKey", message.key())) {
-                    if (inserted.get(i)) {
-                        log.info("Published payload");
-                    } else {
-                        log.warn("Duplicate key {}, {}", message.key(), message.originatedTime());
+            var retryCount = 0;
+            do {
+                try {
+                    var inserted = transactionService.inTransaction(() ->
+                            queryService.insertBatchMessage(messageName, messages));
+                    for (int i = 0; i < inserted.size(); i++) {
+                        Message<T> message = messages.get(i);
+                        var optionalTraceIdMDC = ofNullable(traceIdExtractor.extractTraceId(message.payload()))
+                                .map(v -> MDC.putCloseable("traceId", v));
+                        try (var ignoreKeyMDC = MDC.putCloseable("messageKey", message.key())) {
+                            if (inserted.get(i)) {
+                                log.info("Published payload");
+                            } else {
+                                log.warn("Duplicate key {}, {}", message.key(), message.originatedTime());
+                            }
+                        } finally {
+                            optionalTraceIdMDC.ifPresent(MDC.MDCCloseable::close);
+                        }
                     }
-                } finally {
-                    optionalTraceIdMDC.ifPresent(MDC.MDCCloseable::close);
+                    break;
+                } catch (MissingPartitionException e) {
+                    e.getOriginationTimes().forEach(ot -> queryService.createMessagePartition(messageName, ot));
                 }
-            }
+            } while (++retryCount < 2);
         }
     }
 }

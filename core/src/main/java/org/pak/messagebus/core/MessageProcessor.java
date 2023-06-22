@@ -2,19 +2,18 @@ package org.pak.messagebus.core;
 
 import lombok.NonNull;
 import lombok.extern.slf4j.Slf4j;
-import org.pak.messagebus.core.error.NonRetrayablePersistenceException;
-import org.pak.messagebus.core.error.PersistenceException;
-import org.pak.messagebus.core.error.RetrayablePersistenceException;
-import org.pak.messagebus.core.error.SerializerException;
+import org.pak.messagebus.core.error.*;
 import org.pak.messagebus.core.service.QueryService;
 import org.pak.messagebus.core.service.TransactionService;
 import org.slf4j.MDC;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import static java.util.Optional.of;
 import static java.util.Optional.ofNullable;
 
 @Slf4j
@@ -90,16 +89,7 @@ class MessageProcessor<T> {
                             Thread.sleep(50);
                         }
                     } while (isRunning.get());
-                } catch (InterruptedException e) {
-                    if (log.isTraceEnabled()) {
-                        log.trace("Event processor is interrupted", e);
-                    } else {
-                        log.info("Event processor is interrupted");
-                    }
-
-                    Thread.currentThread().interrupt();
-                    isRunning.set(false);
-                } catch (SerializerException e) {
+                } /*service layer exceptions*/catch (SerializerException e) {
                     log.error("Serializer exception occurred, we cannot skip messages", e);
                     isRunning.set(false);
                 } catch (NonRetrayablePersistenceException e) {
@@ -108,6 +98,19 @@ class MessageProcessor<T> {
                 } catch (RetrayablePersistenceException e) {
                     log.error("Recoverable persistence exception occurred", e);
                     pause = persistenceExceptionPause;
+                } catch (MissingPartitionException e) {
+                    log.info("Create partitions for {}", e.getOriginationTimes());
+                    e.getOriginationTimes()
+                            .forEach(ot -> queryService.createHistoryPartition(subscriptionName, ot));
+                } /*app layer exceptions*/catch (InterruptedException e) {
+                    if (log.isTraceEnabled()) {
+                        log.trace("Event processor is interrupted", e);
+                    } else {
+                        log.info("Event processor is interrupted");
+                    }
+
+                    Thread.currentThread().interrupt();
+                    isRunning.set(false);
                 } catch (Exception e) {
                     log.error("Unexpected exception occurred", e);
                     pause = unpredictedExceptionPause;
@@ -116,6 +119,7 @@ class MessageProcessor<T> {
 
             log.info("Event processor is stopped");
         }
+
     }
 
     boolean poolAndProcess() {
@@ -127,33 +131,35 @@ class MessageProcessor<T> {
         }
 
         for (var messageContainer : messageContainerList) {
-            var optionalTraceIdMDC = ofNullable(traceIdExtractor.extractTraceId(messageContainer.getMessage()))
+            var optionalTraceIdMDC = ofNullable(traceIdExtractor.extractTraceId(messageContainer.getPayload()))
                     .map(v -> MDC.putCloseable("traceId", v));
-
             try (var ignoreExecutorIdMDC = MDC.putCloseable("messageId", messageContainer.getId().toString());
                     var ignoreKeyMDC = MDC.putCloseable("messageKey", messageContainer.getKey())) {
+                log.debug("Start message processing");
+                Optional<Exception> optionalException = Optional.empty();
                 try {
-                    log.debug("Message handling started");
                     messageListener.handle(messageFactory.createMessage(messageContainer.getKey(),
                             messageContainer.getOriginatedTime(),
-                            messageContainer.getMessage()));
-
-                    queryService.completeMessage(subscriptionName, messageContainer);
-
-                    log.info("Message handling done");
-                } catch (PersistenceException e) {
-                    throw e;
+                            messageContainer.getPayload()));
                 } catch (Exception e) {
-                    if (blockingPolicy.isBlocked(e)) {
-                        handleBlockingException(e);
-                    } else if (nonRetryablePolicy.isNonRetryable(e)) {
-                        handleNonRetryableException(messageContainer, e);
-                    } else {
-                        handleRetryableException(messageContainer, e);
-                    }
-                } finally {
-                    optionalTraceIdMDC.ifPresent(MDC.MDCCloseable::close);
+                    optionalException = of(e);
                 }
+
+                if (optionalException.isEmpty()) {
+                    queryService.completeMessage(subscriptionName, messageContainer);
+                    log.info("Message processing completed");
+                } else {
+                    var exception = optionalException.get();
+                    if (blockingPolicy.isBlocked(exception)) {
+                        handleBlockingException(exception);
+                    } else if (nonRetryablePolicy.isNonRetryable(exception)) {
+                        handleNonRetryableException(messageContainer, exception);
+                    } else {
+                        handleRetryableException(messageContainer, exception);
+                    }
+                }
+            } finally {
+                optionalTraceIdMDC.ifPresent(MDC.MDCCloseable::close);
             }
         }
 

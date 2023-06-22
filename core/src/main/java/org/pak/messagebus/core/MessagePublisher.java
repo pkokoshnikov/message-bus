@@ -1,6 +1,7 @@
 package org.pak.messagebus.core;
 
 import lombok.extern.slf4j.Slf4j;
+import org.pak.messagebus.core.error.MissingPartitionException;
 import org.pak.messagebus.core.service.QueryService;
 import org.slf4j.MDC;
 
@@ -34,10 +35,7 @@ class MessagePublisher<T> {
         publish(messageFactory.createMessage(UUID.randomUUID().toString(), Instant.now(), message));
     }
 
-    //TODO: add create time
-    //TODO: add payload types: COMMAND, EVENT, QUERY, REPLY
     //TODO: cleaner
-    //TODO: partitioning
     public void publish(Message<T> message) {
         var optionalTraceIdMDC = ofNullable(traceIdExtractor.extractTraceId(message.payload()))
                 .map(v -> MDC.putCloseable("traceId", v));
@@ -46,13 +44,20 @@ class MessagePublisher<T> {
                 var ignoreKeyMDC = MDC.putCloseable("messageKey", message.key())) {
             log.debug("Publish payload {}", message.payload());
 
-            var inserted = queryService.insertMessage(messageName, message);
-
-            if (inserted) {
-                log.info("Published payload");
-            } else {
-                log.warn("Duplicate key {}, {}", message.key(), message.originatedTime());
-            }
+            int retryCount = 0;
+            do {
+                try {
+                    var inserted = queryService.insertMessage(messageName, message);
+                    if (inserted) {
+                        log.info("Published payload");
+                    } else {
+                        log.warn("Duplicate key {}, {}", message.key(), message.originatedTime());
+                    }
+                    break;
+                } catch (MissingPartitionException e) {
+                    e.getOriginationTimes().forEach(ot -> queryService.createMessagePartition(messageName, ot));
+                }
+            } while (++retryCount < 2);
         } finally {
             optionalTraceIdMDC.ifPresent(MDC.MDCCloseable::close);
         }
