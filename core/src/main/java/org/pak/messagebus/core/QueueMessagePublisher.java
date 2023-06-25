@@ -43,7 +43,6 @@ class QueueMessagePublisher<T> {
                     optionalTraceIdMDC.ifPresent(MDC.MDCCloseable::close);
                 });
             }
-            var retryCount = 0;
             do {
                 try {
                     var inserted = transactionService.inTransaction(() ->
@@ -64,9 +63,14 @@ class QueueMessagePublisher<T> {
                     }
                     break;
                 } catch (MissingPartitionException e) {
+                    log.warn("Missing partition for butch");
                     e.getOriginationTimes().forEach(ot -> queryService.createMessagePartition(messageName, ot));
+                    Thread.sleep(50);
                 }
-            } while (++retryCount < 2);
+            } while (true);
+        } catch (InterruptedException e) {
+            log.warn("Queue message publisher is interrupted", e);
+            Thread.currentThread().interrupt();
         }
     }
 }

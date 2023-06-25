@@ -19,10 +19,11 @@ public class SubscriberConfig<T> {
     @NonNull
     MessageListener<T> messageListener;
     @Builder.Default
-    BlockingPolicy blockingPolicy = new SimpleBlockingPolicy();
+    BlockingPolicy blockingPolicy = new StdBlockingPolicy();
     @Builder.Default
-    RetryablePolicy retryablePolicy = new SimpleRetryablePolicy();
-    NonRetryablePolicy nonRetryablePolicy = new SimpleNonRetryablePolicy();
+    RetryablePolicy retryablePolicy = new StdRetryablePolicy();
+    @Builder.Default
+    NonRetryablePolicy nonRetryablePolicy = new StdNonRetryablePolicy();
     @Builder.Default
     Properties properties = Properties.builder().build();
     @Builder.Default
@@ -44,5 +45,7 @@ public class SubscriberConfig<T> {
         //pause between retries for unpredicted exceptions
         @Builder.Default
         Duration unpredictedExceptionPause = Duration.of(30, ChronoUnit.SECONDS);
+        @Builder.Default
+        int storageDays = 30;
     }
 }

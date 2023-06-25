@@ -1,6 +1,6 @@
 package org.pak.messagebus.core;
 
-public class SimpleNonRetryablePolicy implements NonRetryablePolicy {
+public class StdNonRetryablePolicy implements NonRetryablePolicy {
 
     @Override
     public boolean isNonRetryable(Exception exception) {

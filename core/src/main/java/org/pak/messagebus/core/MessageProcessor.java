@@ -18,7 +18,6 @@ import static java.util.Optional.ofNullable;
 
 @Slf4j
 class MessageProcessor<T> {
-
     private final String id = UUID.randomUUID().toString();
     private final RetryablePolicy retryablePolicy;
     private final NonRetryablePolicy nonRetryablePolicy;
@@ -89,7 +88,7 @@ class MessageProcessor<T> {
                             Thread.sleep(50);
                         }
                     } while (isRunning.get());
-                } /*service layer exceptions*/catch (SerializerException e) {
+                } catch (SerializerException e) { /*service layer exceptions*/
                     log.error("Serializer exception occurred, we cannot skip messages", e);
                     isRunning.set(false);
                 } catch (NonRetrayablePersistenceException e) {
@@ -99,15 +98,11 @@ class MessageProcessor<T> {
                     log.error("Recoverable persistence exception occurred", e);
                     pause = persistenceExceptionPause;
                 } catch (MissingPartitionException e) {
-                    log.info("Create partitions for {}", e.getOriginationTimes());
+                    log.warn("Missing partition for {}", e.getOriginationTimes());
                     e.getOriginationTimes()
                             .forEach(ot -> queryService.createHistoryPartition(subscriptionName, ot));
-                } /*app layer exceptions*/catch (InterruptedException e) {
-                    if (log.isTraceEnabled()) {
-                        log.trace("Event processor is interrupted", e);
-                    } else {
-                        log.info("Event processor is interrupted");
-                    }
+                } catch (InterruptedException e) {  /*app layer exceptions*/
+                    log.warn("Message processor is interrupted", e);
 
                     Thread.currentThread().interrupt();
                     isRunning.set(false);

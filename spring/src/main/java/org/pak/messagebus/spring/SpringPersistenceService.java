@@ -1,6 +1,5 @@
 package org.pak.messagebus.spring;
 
-import org.pak.messagebus.core.error.DuplicateKeyException;
 import org.pak.messagebus.core.error.NonRetrayablePersistenceException;
 import org.pak.messagebus.core.error.RetrayablePersistenceException;
 import org.pak.messagebus.core.service.PersistenceService;
@@ -8,8 +7,6 @@ import org.springframework.jdbc.BadSqlGrammarException;
 import org.springframework.jdbc.core.ArgumentPreparedStatementSetter;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.PreparedStatementCallback;
-import org.springframework.jdbc.core.PreparedStatementCreator;
-import org.springframework.jdbc.support.JdbcUtils;
 
 import java.sql.ResultSet;
 import java.util.List;

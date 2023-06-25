@@ -3,9 +3,7 @@ package org.pak.messagebus.pg;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.exception.ExceptionUtils;
 import org.pak.messagebus.core.*;
-import org.pak.messagebus.core.error.MissingPartitionException;
-import org.pak.messagebus.core.error.NonRetrayablePersistenceException;
-import org.pak.messagebus.core.error.RetrayablePersistenceException;
+import org.pak.messagebus.core.error.*;
 import org.pak.messagebus.core.service.PersistenceService;
 import org.pak.messagebus.core.service.QueryService;
 import org.pak.messagebus.pg.jsonb.JsonbConverter;
@@ -29,7 +27,7 @@ import static java.util.Optional.ofNullable;
 
 @Slf4j
 public class PgQueryService implements QueryService {
-    private static final DateTimeFormatter dateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+    private static final DateTimeFormatter dateFormatter = DateTimeFormatter.ofPattern("yyyy_MM_dd");
     private static final String MISSING_PARTITION_CODE = "23514";
     private final PersistenceService persistenceService;
     private final SchemaName schemaName;
@@ -67,7 +65,7 @@ public class PgQueryService implements QueryService {
 
     public void createPartition(String table, Instant dateTime) {
         var date = dateTime.atOffset(ZoneOffset.UTC).toLocalDate();
-        var partition = table + "_" + dateFormatter.format(date).replace("-", "_");
+        var partition = table + "_" + dateFormatter.format(date);
         log.info("Create partition {}", partition);
 
         var query = formatter.execute("""
@@ -146,13 +144,73 @@ public class PgQueryService implements QueryService {
     }
 
     @Override
-    public void createMessagePartition(MessageName messageName, Instant dateTime) {
-        createPartition(messageTable(messageName), dateTime);
+    public void dropMessagePartition(MessageName messageName, LocalDate partition) {
+        var query = formatter.execute("""
+                ALTER TABLE ${schema}.${messageTable} DETACH PARTITION ${schema}.${partition} CONCURRENTLY;
+                DROP TABLE IF EXISTS ${schema}.${partition};
+                """, Map.of("schema", schemaName.value(),
+                "messageTable", messageTable(messageName),
+                "partition", messageTable(messageName) + "_" + dateFormatter.format(partition)));
+        try {
+            persistenceService.execute(query);
+        } catch (PersistenceException e) {
+            if (PSQLException.class.isAssignableFrom(e.getOriginalCause().getClass()) &&
+                    ((PSQLException) e.getOriginalCause()).getSQLState().equals("23503")) {
+                throw new PartitionHasReferencesException();
+            } else {
+                throw e;
+            }
+        }
+
     }
 
     @Override
-    public void createHistoryPartition(SubscriptionName messageName, Instant dateTime) {
-        createPartition(subscriptionHistoryTable(messageName), dateTime);
+    public void dropHistoryPartition(SubscriptionName messageName, LocalDate partition) {
+        var partitionName = subscriptionHistoryTable(messageName) + "_" + dateFormatter.format(partition);
+
+        var query = formatter.execute("""
+                ALTER TABLE ${schema}.${historyTable} DETACH PARTITION ${schema}.${partition} CONCURRENTLY;
+                DROP TABLE IF EXISTS ${schema}.${partition};
+                """, Map.of("schema", schemaName.value(),
+                "historyTable", subscriptionHistoryTable(messageName),
+                "partition", partitionName));
+
+        persistenceService.execute(query);
+    }
+
+    @Override
+    public void createMessagePartition(MessageName messageName, Instant includeDateTime) {
+        createPartition(messageTable(messageName), includeDateTime);
+    }
+
+    @Override
+    public void createHistoryPartition(SubscriptionName messageName, Instant includeDateTime) {
+        createPartition(subscriptionHistoryTable(messageName), includeDateTime);
+    }
+
+    @Override
+    public List<LocalDate> getAllPartitions(MessageName messageName) {
+        return getAllPartitions(messageTable(messageName));
+    }
+
+    @Override
+    public List<LocalDate> getAllPartitions(SubscriptionName subscriptionName) {
+        return getAllPartitions(subscriptionHistoryTable(subscriptionName));
+    }
+
+    private List<LocalDate> getAllPartitions(String tableName) {
+        var query = formatter.execute("""
+                        SELECT inhrelid::regclass AS partition
+                        FROM   pg_catalog.pg_inherits
+                        WHERE  inhparent = '${schema}.${table}'::regclass;""",
+                Map.of("schema", schemaName.value(), "table", tableName));
+        return persistenceService.query(query, rs -> {
+            try {
+                return LocalDate.parse(rs.getString("partition").replace(tableName + "_", ""), dateFormatter);
+            } catch (SQLException e) {
+                throw new NonRetrayablePersistenceException(e, e.getCause());
+            }
+        });
     }
 
     @Override
@@ -198,6 +256,7 @@ public class PgQueryService implements QueryService {
                         SELECT s.id, s.message_id, s.attempt, s.error_message, s.stack_trace, s.created_at, s.updated_at,
                             s.execute_after, m.originated_at, m.key, m.payload
                         FROM ${schema}.${subscriptionTable} s JOIN ${schema}.${messageTable} m ON s.message_id = m.id
+                            AND s.originated_at = m.originated_at
                         WHERE s.execute_after < CURRENT_TIMESTAMP
                         ORDER BY s.execute_after ASC
                         LIMIT ${maxPollRecords} FOR UPDATE OF s SKIP LOCKED""",
@@ -256,10 +315,6 @@ public class PgQueryService implements QueryService {
                             SELECT id, message_id, originated_at, attempt, 'FAILED' as status, ?, ? FROM deleted""",
                 Map.of("schema", schemaName.value(), "subscriptionTable", subscriptionTable(subscriptionName),
                         "subscriptionHistoryTable", subscriptionHistoryTable(subscriptionName))));
-
-        log.debug("failMessage query: {}", query);
-
-        var originatedTime = OffsetDateTime.ofInstant(messageContainer.getOriginatedTime(), ZoneId.systemDefault());
 
         var updated = handleMissingPartition(
                 () -> persistenceService.update(query, messageContainer.getId(), e.getMessage(),

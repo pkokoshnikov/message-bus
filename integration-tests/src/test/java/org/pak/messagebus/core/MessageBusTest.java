@@ -51,9 +51,11 @@ class MessageBusTest {
         jsonbConverter = new JsonbConverter();
         jsonbConverter.registerType(MESSAGE_NAME.name(), TestMessage.class);
         transactionTemplate = new TransactionTemplate(new JdbcTransactionManager(dataSource) {});
+
         messageBus = new MessageBus(
                 new PgQueryService(new SpringPersistenceService(jdbcTemplate), SCHEMA_NAME, jsonbConverter),
-                new SpringTransactionService(transactionTemplate), new DefaultMessageFactory());
+                new SpringTransactionService(transactionTemplate), new StdMessageFactory(),
+                CronConfig.builder().build());
     }
 
     @AfterEach
@@ -66,6 +68,9 @@ class MessageBusTest {
         messageBus.registerPublisher(PublisherConfig.<TestMessage>builder()
                 .messageName(MESSAGE_NAME)
                 .clazz(TestMessage.class)
+                .properties(PublisherConfig.Properties.builder()
+                        .storageDays(10)
+                        .build())
                 .build());
 
         var countDownLatch = new CountDownLatch(2);

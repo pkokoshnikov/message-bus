@@ -11,24 +11,31 @@ public class MessageBus {
     private final QueryService queryService;
     private final TransactionService transactionService;
     private final MessageFactory messageFactory;
+    private final TableManager tableManager;
 
     public MessageBus(
             QueryService queryService,
             TransactionService transactionService,
-            MessageFactory messageFactory
+            MessageFactory messageFactory,
+            CronConfig cronConfig
     ) {
         this.queryService = queryService;
         this.transactionService = transactionService;
         this.messageFactory = messageFactory;
+        this.tableManager = new TableManager(queryService, cronConfig.getCreatingPartitionsCron(),
+                cronConfig.getCleaningPartitionsCron());
     }
 
     public MessageBus(
             QueryService queryService,
-            TransactionService transactionService
+            TransactionService transactionService,
+            CronConfig cronConfig
     ) {
         this.queryService = queryService;
         this.transactionService = transactionService;
-        this.messageFactory = new DefaultMessageFactory();
+        this.messageFactory = new StdMessageFactory();
+        this.tableManager = new TableManager(queryService, cronConfig.getCreatingPartitionsCron(),
+                cronConfig.getCleaningPartitionsCron());
     }
 
     private final ConcurrentHashMap<String, MessageProcessorStarter<?>> messageProcessorStarters =
@@ -42,22 +49,36 @@ public class MessageBus {
                         publisherConfig.getTraceIdExtractor(),
                         queryService,
                         messageFactory));
+
+        tableManager.registerMessage(publisherConfig.getMessageName(),
+                publisherConfig.getProperties().getStorageDays());
     }
 
     public <T> void registerSubscriber(SubscriberConfig<T> subscriberConfig) {
         messageProcessorStarters.computeIfAbsent(
                 subscriberConfig.getMessageName() + "_" + subscriberConfig.getSubscriptionName(), s -> {
                     var starter = new MessageProcessorStarter<>(subscriberConfig, queryService, transactionService,
-                            messageFactory);
+                            messageFactory, tableManager);
                     log.info("Register subscriber on payload {} with subscription {}",
                             subscriberConfig.getMessageName(),
                             subscriberConfig.getSubscriptionName());
                     return starter;
                 });
+
+        tableManager.registerSubscription(subscriberConfig.getMessageName(), subscriberConfig.getSubscriptionName(),
+                subscriberConfig.getProperties().getStorageDays());
     }
 
     public <T> void publish(T message) {
         ((MessagePublisher<T>) messagePublishers.get(message.getClass())).publish(message);
+    }
+
+    public void startTableManager() {
+        tableManager.startCronJobs();
+    }
+
+    public void stopTableManager() {
+        tableManager.stopCronJobs();
     }
 
     public void startSubscribers() {

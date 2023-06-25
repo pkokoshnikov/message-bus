@@ -16,15 +16,19 @@ public class QueueAdapter {
             new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Class<?>, QueueMessagePublisher<?>> messagePublishers =
             new ConcurrentHashMap<>();
+    private final TableManager tableManager;
 
     public QueueAdapter(
             QueryService queryService,
             TransactionService transactionService,
-            MessageFactory messageFactory
+            MessageFactory messageFactory,
+            CronConfig cronConfig
     ) {
         this.queryService = queryService;
         this.transactionService = transactionService;
         this.messageFactory = messageFactory;
+        this.tableManager = new TableManager(queryService, cronConfig.getCreatingPartitionsCron(),
+                cronConfig.getCleaningPartitionsCron());
     }
 
     public <T> void registerPublisher(PublisherConfig<T> publisherConfig) {
@@ -32,18 +36,23 @@ public class QueueAdapter {
                 k -> new QueueMessagePublisher<>(publisherConfig.getMessageName(),
                         publisherConfig.getTraceIdExtractor(),
                         queryService, transactionService));
+
+        tableManager.registerMessage(publisherConfig.getMessageName(), publisherConfig.getProperties().getStorageDays());
     }
 
     public <T> void registerSubscriber(SubscriberConfig<T> subscriberConfig) {
         messageProcessorStarters.computeIfAbsent(
                 subscriberConfig.getMessageName() + "_" + subscriberConfig.getSubscriptionName(), s -> {
                     var starter = new MessageProcessorStarter<>(subscriberConfig, queryService, transactionService,
-                            messageFactory);
+                            messageFactory, tableManager);
                     log.info("Register subscriber on payload {} with subscription {}",
                             subscriberConfig.getMessageName(),
                             subscriberConfig.getSubscriptionName());
                     return starter;
                 });
+
+        tableManager.registerSubscription(subscriberConfig.getMessageName(), subscriberConfig.getSubscriptionName(),
+                subscriberConfig.getProperties().getStorageDays());
     }
 
     public <T> void publish(Class<T> clazz, List<Message<T>> messages) {

@@ -21,21 +21,25 @@ class MessageProcessorStarter<T> {
     private final SubscriberConfig<T> subscriberConfig;
     private final int concurrency;
     private final MessageFactory messageFactory;
+    private final TableManager tableManager;
     private List<MessageProcessor<T>> messageProcessors;
     private final AtomicBoolean isRunning = new AtomicBoolean(false);
 
-    MessageProcessorStarter(SubscriberConfig<T> subscriberConfig,
+    MessageProcessorStarter(
+            SubscriberConfig<T> subscriberConfig,
             QueryService queryService,
             TransactionService transactionService,
-            MessageFactory messageFactory
+            MessageFactory messageFactory,
+            TableManager tableManager
     ) {
         this.subscriberConfig = subscriberConfig;
         this.concurrency = subscriberConfig.getProperties().getConcurrency();
         this.messageFactory = messageFactory;
+        this.tableManager = tableManager;
 
         this.fixedThreadPoolExecutor = Executors.newFixedThreadPool(concurrency,
                 r -> new ThreadFactoryBuilder()
-                        .setNameFormat("payload-processor-%d")
+                        .setNameFormat(subscriberConfig.getMessageName() + "-processor-%d")
                         .setDaemon(true)
                         .setUncaughtExceptionHandler((t, e) -> {
                             log.error("Uncaught exception in thread {}", t.getName(), e);
@@ -48,9 +52,8 @@ class MessageProcessorStarter<T> {
 
     public void start() {
         if (isRunning.compareAndSet(false, true)) {
-            queryService.initMessageTable(subscriberConfig.getMessageName());
-            queryService.initSubscriptionTable(subscriberConfig.getMessageName(),
-                    subscriberConfig.getSubscriptionName());
+            tableManager.registerSubscription(subscriberConfig.getMessageName(), subscriberConfig.getSubscriptionName(),
+                    subscriberConfig.getProperties().getStorageDays());
 
             messageProcessors = IntStream.range(0, concurrency).boxed()
                     .map(i -> {

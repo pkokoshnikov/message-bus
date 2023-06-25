@@ -1,5 +1,10 @@
 package org.pak.messagebus.core;
 
+import lombok.EqualsAndHashCode;
+import lombok.ToString;
+
+@ToString
+@EqualsAndHashCode
 public class MessageName {
     private final String messageName;
 
