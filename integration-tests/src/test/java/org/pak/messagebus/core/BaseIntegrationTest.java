@@ -2,16 +2,13 @@ package org.pak.messagebus.core;
 
 import eu.rekawek.toxiproxy.Proxy;
 import eu.rekawek.toxiproxy.ToxiproxyClient;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.BeforeEach;
 import org.pak.messagebus.pg.PgQueryService;
 import org.pak.messagebus.pg.jsonb.JsonbConverter;
 import org.pak.messagebus.spring.SpringPersistenceService;
 import org.pak.messagebus.spring.SpringTransactionService;
 import org.postgresql.ds.PGSimpleDataSource;
 import org.postgresql.util.PGobject;
-import org.slf4j.Logger;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.support.JdbcTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -19,33 +16,29 @@ import org.testcontainers.containers.Network;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.containers.ToxiproxyContainer;
 import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
+import javax.sql.DataSource;
 import java.io.IOException;
 import java.math.BigInteger;
-import java.time.Duration;
-import java.time.Instant;
 import java.time.OffsetDateTime;
-import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 
 import static java.util.Optional.ofNullable;
 import static org.assertj.core.api.Assertions.assertThat;
 
-@Testcontainers
 public class BaseIntegrationTest {
-    Logger log = org.slf4j.LoggerFactory.getLogger(this.getClass());
-    static SubscriptionName TEST_SUBSCRIPTION_NAME = new SubscriptionName("test-subscription");
+    static SubscriptionName SUBSCRIPTION_NAME_1 = new SubscriptionName("test-subscription-one");
+    static SubscriptionName SUBSCRIPTION_NAME_2 = new SubscriptionName("test-subscription-two");
     static SchemaName TEST_SCHEMA = new SchemaName("public");
     static String TEST_VALUE = "test-value";
     static String TEST_EXCEPTION_MESSAGE = "test-exception-payload";
-    QueueMessagePublisher<TestMessage> queueMessagePublisher;
     PgQueryService pgQueryService;
-    StringFormatter formatter = new StringFormatter();
-
+    TableManager tableManager;
+    static StringFormatter formatter = new StringFormatter();
     static Network network = Network.newNetwork();
+    static String jdbcUrl;
 
     @Container
     static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>(DockerImageName.parse("postgres:15.1"))
@@ -60,97 +53,149 @@ public class BaseIntegrationTest {
     SpringTransactionService springTransactionService;
     MessageProcessorFactory.MessageProcessorFactoryBuilder<TestMessage> messageProcessorFactory;
     MessagePublisherFactory.MessagePublisherFactoryBuilder<TestMessage> messagePublisherFactory;
+    QueueMessagePublisherFactory.QueueMessagePublisherFactoryBuilder<TestMessage> queueMessagePublisherFactory;
+    DataSource dataSource;
+    SpringPersistenceService persistenceService;
 
     @BeforeAll
     static void beforeAll() throws IOException {
         var toxiproxyClient = new ToxiproxyClient(toxiproxy.getHost(), toxiproxy.getControlPort());
         postgresqlProxy = toxiproxyClient.createProxy("postgresql", "0.0.0.0:8666", "postgres:5432");
+        jdbcUrl = "jdbc:postgresql://%s:%d/%s".formatted(toxiproxy.getHost(), toxiproxy.getMappedPort(8666),
+                postgres.getDatabaseName());
     }
 
-    @BeforeEach
-    void setUp() {
-        var jdbcUrl = "jdbc:postgresql://%s:%d/%s".formatted(toxiproxy.getHost(), toxiproxy.getMappedPort(8666),
-                postgres.getDatabaseName());
+    static JdbcTemplate setupJdbcTemplate(DataSource dataSource) {
+        return new JdbcTemplate(dataSource);
+    }
 
+    static DataSource setupDatasource() {
         var dataSource = new PGSimpleDataSource();
         dataSource.setUrl(jdbcUrl);
         dataSource.setDatabaseName(postgres.getDatabaseName());
         dataSource.setUser(postgres.getUsername());
         dataSource.setPassword(postgres.getPassword());
+        return dataSource;
+    }
 
-        jdbcTemplate = new JdbcTemplate(dataSource);
-        jsonbConverter = new JsonbConverter();
-        jsonbConverter.registerType(TestMessage.MESSAGE_NAME.name(), TestMessage.class);
-
-        springTransactionService = new SpringTransactionService(new TransactionTemplate(
+    static SpringTransactionService setupSpringTransactionService(DataSource dataSource) {
+        return new SpringTransactionService(new TransactionTemplate(
                 new JdbcTransactionManager(dataSource) {}));
+    }
 
-        pgQueryService = new PgQueryService(new SpringPersistenceService(jdbcTemplate), TEST_SCHEMA, jsonbConverter);
+    static SpringPersistenceService setupPersistenceService(JdbcTemplate jdbcTemplate) {
+        return new SpringPersistenceService(jdbcTemplate);
+    }
 
-        messagePublisherFactory = MessagePublisherFactory.<TestMessage>builder()
+    static PgQueryService setupQueryService(SpringPersistenceService persistenceService, JsonbConverter jsonbConverter) {
+        return new PgQueryService(persistenceService, TEST_SCHEMA, jsonbConverter);
+    }
+
+    static JsonbConverter setupJsonbConverter() {
+        var jsonbConverter = new JsonbConverter();
+        jsonbConverter.registerType(TestMessage.MESSAGE_NAME.name(), TestMessage.class);
+        return jsonbConverter;
+    }
+
+    static MessagePublisherFactory.MessagePublisherFactoryBuilder<TestMessage> setupMessagePublisherFactory(
+            TableManager tableManager,
+            PgQueryService pgQueryService
+    ) {
+        return MessagePublisherFactory.<TestMessage>builder()
+                .publisherConfig(PublisherConfig.<TestMessage>builder()
+                        .properties(PublisherConfig.Properties.builder()
+                                .storageDays(30)
+                                .build())
+                        .messageName(TestMessage.MESSAGE_NAME)
+                        .clazz(TestMessage.class)
+                        .traceIdExtractor(new NullTraceIdExtractor<>())
+                        .build())
                 .messageFactory(new StdMessageFactory())
-                .messageName(TestMessage.MESSAGE_NAME)
-                .queryService(pgQueryService)
-                .traceIdExtractor(new NullTraceIdExtractor<>());
+                .tableManager(tableManager)
+                .queryService(pgQueryService);
+    }
 
-        queueMessagePublisher = new QueueMessagePublisher<>(TestMessage.MESSAGE_NAME, TestMessage::getName,
-                pgQueryService, springTransactionService);
-
-        pgQueryService.initMessageTable(TestMessage.MESSAGE_NAME);
-        pgQueryService.initSubscriptionTable(TestMessage.MESSAGE_NAME, TEST_SUBSCRIPTION_NAME);
-
-        var now = Instant.now().truncatedTo(ChronoUnit.DAYS);
-        pgQueryService.createMessagePartition(TestMessage.MESSAGE_NAME, now);
-        pgQueryService.createMessagePartition(TestMessage.MESSAGE_NAME, now.plus(Duration.ofDays(1)));
-        pgQueryService.createHistoryPartition(TEST_SUBSCRIPTION_NAME, now);
-        pgQueryService.createHistoryPartition(TEST_SUBSCRIPTION_NAME, now.plus(Duration.ofDays(1)));
-
-        messageProcessorFactory = MessageProcessorFactory.<TestMessage>builder()
+    static QueueMessagePublisherFactory.QueueMessagePublisherFactoryBuilder<TestMessage> setupQueueMessagePublisherFactory(
+            TableManager tableManager,
+            PgQueryService pgQueryService,
+            SpringTransactionService transactionService
+    ) {
+        return QueueMessagePublisherFactory.<TestMessage>builder()
+                .publisherConfig(PublisherConfig.<TestMessage>builder()
+                        .properties(PublisherConfig.Properties.builder()
+                                .storageDays(30)
+                                .build())
+                        .messageName(TestMessage.MESSAGE_NAME)
+                        .clazz(TestMessage.class)
+                        .traceIdExtractor(new NullTraceIdExtractor<>())
+                        .build())
                 .messageFactory(new StdMessageFactory())
-                .messageListener(testMessage -> log.info("Handle testMessage: {}", testMessage))
+                .transactionService(transactionService)
+                .tableManager(tableManager)
+                .queryService(pgQueryService);
+    }
+
+    static MessageProcessorFactory.MessageProcessorFactoryBuilder<TestMessage> setupMessageProcessorFactory(
+            PgQueryService pgQueryService,
+            SpringTransactionService springTransactionService
+    ) {
+        return MessageProcessorFactory.<TestMessage>builder()
+                .messageFactory(new StdMessageFactory())
+                .messageListener(testMessage -> {})
                 .queryService(pgQueryService)
                 .transactionService(springTransactionService)
                 .retryablePolicy(new StdRetryablePolicy())
                 .blockingPolicy(new StdBlockingPolicy())
                 .nonRetryablePolicy(new StdNonRetryablePolicy())
                 .messageName(TestMessage.MESSAGE_NAME)
-                .subscriptionName(TEST_SUBSCRIPTION_NAME)
+                .subscriptionName(SUBSCRIPTION_NAME_1)
                 .traceIdExtractor(object -> null)
                 .properties(SubscriberConfig.Properties.builder().build());
     }
 
-    @AfterEach
-    void clear() {
+    static TableManager setupTableManager(PgQueryService pgQueryService) {
+        return new TableManager(pgQueryService, "* * * * * ?", "* * * * * ?");
+    }
+
+    static void clearTables(JdbcTemplate jdbcTemplate) {
         jdbcTemplate.update(formatter.execute("DROP TABLE IF EXISTS ${schema}.${subscriptionTable}",
                 Map.of("schema", TEST_SCHEMA.value(),
-                        "subscriptionTable", "test_subscription")));
+                        "subscriptionTable", "test_subscription_one")));
 
         jdbcTemplate.update(formatter.execute("DROP TABLE IF EXISTS ${schema}.${subscriptionTable}_history",
                 Map.of("schema", TEST_SCHEMA.value(),
-                        "subscriptionTable", "test_subscription")));
+                        "subscriptionTable", "test_subscription_one")));
+
+        jdbcTemplate.update(formatter.execute("DROP TABLE IF EXISTS ${schema}.${subscriptionTable}",
+                Map.of("schema", TEST_SCHEMA.value(),
+                        "subscriptionTable", "test_subscription_two")));
+
+        jdbcTemplate.update(formatter.execute("DROP TABLE IF EXISTS ${schema}.${subscriptionTable}_history",
+                Map.of("schema", TEST_SCHEMA.value(),
+                        "subscriptionTable", "test_subscription_two")));
 
         jdbcTemplate.update(formatter.execute("DROP TABLE IF EXISTS ${schema}.${messageTable}",
                 Map.of("schema", TEST_SCHEMA.value(),
                         "messageTable", "test_message")));
     }
 
-    MessageContainer<TestMessage> hasSize1AndGetFirst(List<MessageContainer<TestMessage>> testMessageContainers) {
+    static MessageContainer<TestMessage> hasSize1AndGetFirst(List<MessageContainer<TestMessage>> testMessageContainers) {
         assertThat(testMessageContainers).hasSize(1);
         return testMessageContainers.get(0);
     }
 
-    MessageHistoryContainer<TestMessage> hasSize1AndGetFirstHistory(List<MessageHistoryContainer<TestMessage>> testMessageContainers) {
+    static MessageHistoryContainer<TestMessage> hasSize1AndGetFirstHistory(List<MessageHistoryContainer<TestMessage>> testMessageContainers) {
         assertThat(testMessageContainers).hasSize(1);
         return testMessageContainers.get(0);
     }
 
-    List<MessageContainer<TestMessage>> selectTestMessages() {
+    List<MessageContainer<TestMessage>> selectTestMessages(SubscriptionName subscriptionName) {
         var query = formatter.execute("""
                         SELECT s.id, s.message_id, s.attempt, s.error_message, s.stack_trace, s.created_at, s.updated_at,
                             s.execute_after, m.payload, m.originated_at, m.key
                         FROM ${schema}.${subscriptionTable} s JOIN ${schema}.${messageTable} m ON s.message_id = m.id""",
                 Map.of("schema", TEST_SCHEMA.value(),
-                        "subscriptionTable", "test_subscription",
+                        "subscriptionTable", subscriptionName.name().replace("-", "_"),
                         "messageTable", "test_message"));
 
         return jdbcTemplate.query(query,
@@ -172,12 +217,12 @@ public class BaseIntegrationTest {
                         rs.getString("stack_trace")));
     }
 
-    List<MessageHistoryContainer<TestMessage>> selectTestMessagesFromHistory() {
+    List<MessageHistoryContainer<TestMessage>> selectTestMessagesFromHistory(SubscriptionName subscriptionName) {
         var query = formatter.execute("""
                         SELECT s.id, s.message_id, s.attempt, s.status, s.error_message, s.stack_trace, s.created_at, m.payload
                         FROM ${schema}.${subscriptionTableHistory} s JOIN ${schema}.${messageTable} m ON s.message_id = m.id""",
                 Map.of("schema", TEST_SCHEMA.value(),
-                        "subscriptionTableHistory", "test_subscription_history",
+                        "subscriptionTableHistory", subscriptionName.name().replace("-", "_") + "_history",
                         "messageTable", "test_message"));
 
         return jdbcTemplate.query(query,

@@ -3,20 +3,20 @@ package org.pak.messagebus.core;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.pak.messagebus.core.error.PartitionHasReferencesException;
-import org.pak.messagebus.core.error.PersistenceException;
 import org.pak.messagebus.core.error.RetrayablePersistenceException;
 import org.pak.messagebus.core.service.QueryService;
 import org.quartz.*;
 import org.quartz.impl.StdSchedulerFactory;
 
-import java.time.*;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.function.Consumer;
-import java.util.function.Supplier;
 
 @Slf4j
 class TableManager {
@@ -27,13 +27,12 @@ class TableManager {
     private final String cronDropPartitions;
     private final Map<MessageName, Integer> messageNameStorageDays = new ConcurrentHashMap<>();
     private final Map<SubscriptionName, Integer> historyStorageDays = new ConcurrentHashMap<>();
-    private final ScheduledExecutorService scheduledThread;
+    private Scheduler scheduler;
 
     TableManager(QueryService queryService, String cronCreatePartitions, String cronDropPartitions) {
         this.queryService = queryService;
         this.cronCreatePartitions = cronCreatePartitions;
         this.cronDropPartitions = cronDropPartitions;
-        this.scheduledThread = Executors.newSingleThreadScheduledExecutor();
     }
 
     void registerMessage(MessageName messageName, int storageDays) {
@@ -56,7 +55,7 @@ class TableManager {
     void startCronJobs() {
         try {
             var schedulerFactory = new StdSchedulerFactory();
-            var scheduler = schedulerFactory.getScheduler();
+            scheduler = schedulerFactory.getScheduler();
 
             scheduler.getContext().putIfAbsent(TABLE_MANAGER, this);
 
@@ -76,8 +75,11 @@ class TableManager {
         }
     }
 
+    @SneakyThrows
     void stopCronJobs() {
-        scheduledThread.shutdown();
+        if (scheduler != null) {
+            scheduler.clear();
+        }
     }
 
     private void addCronJob(String jobKey, Class<? extends Job> clazz, String cron, Scheduler scheduler)
@@ -146,7 +148,6 @@ class TableManager {
     }
 
     public static class CleaningPartitionsCronJob implements Job {
-
         @Override
         public void execute(JobExecutionContext context) {
             doJob(context, TableManager::cleanPartitions);

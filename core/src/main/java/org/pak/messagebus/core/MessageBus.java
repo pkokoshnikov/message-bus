@@ -45,10 +45,7 @@ public class MessageBus {
 
     public <T> void registerPublisher(PublisherConfig<T> publisherConfig) {
         messagePublishers.computeIfAbsent(publisherConfig.getClazz(),
-                k -> new MessagePublisher<>(publisherConfig.getMessageName(),
-                        publisherConfig.getTraceIdExtractor(),
-                        queryService,
-                        messageFactory));
+                k -> new MessagePublisher<>(publisherConfig, queryService, messageFactory, tableManager));
 
         tableManager.registerMessage(publisherConfig.getMessageName(),
                 publisherConfig.getProperties().getStorageDays());
@@ -64,28 +61,19 @@ public class MessageBus {
                             subscriberConfig.getSubscriptionName());
                     return starter;
                 });
-
-        tableManager.registerSubscription(subscriberConfig.getMessageName(), subscriberConfig.getSubscriptionName(),
-                subscriberConfig.getProperties().getStorageDays());
     }
 
     public <T> void publish(T message) {
         ((MessagePublisher<T>) messagePublishers.get(message.getClass())).publish(message);
     }
 
-    public void startTableManager() {
-        tableManager.startCronJobs();
-    }
-
-    public void stopTableManager() {
-        tableManager.stopCronJobs();
-    }
-
     public void startSubscribers() {
         messageProcessorStarters.values().forEach(MessageProcessorStarter::start);
+        tableManager.startCronJobs();
     }
 
     public void stopSubscribers() {
         messageProcessorStarters.values().forEach(MessageProcessorStarter::stop);
+        tableManager.stopCronJobs();
     }
 }

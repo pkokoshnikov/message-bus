@@ -18,17 +18,17 @@ class QueueMessagePublisher<T> {
     private final TransactionService transactionService;
 
     QueueMessagePublisher(
-            MessageName messageName,
-            TraceIdExtractor<T> traceIdExtractor,
+            PublisherConfig<T> publisherConfig,
             QueryService queryService,
-            TransactionService transactionService
+            TransactionService transactionService,
+            TableManager tableManager
     ) {
-        this.messageName = messageName;
+        this.messageName = publisherConfig.getMessageName();
         this.queryService = queryService;
-        this.traceIdExtractor = traceIdExtractor;
+        this.traceIdExtractor = publisherConfig.getTraceIdExtractor();
         this.transactionService = transactionService;
 
-        queryService.initMessageTable(messageName);
+        tableManager.registerMessage(messageName, publisherConfig.getProperties().getStorageDays());
     }
 
     public void publish(List<Message<T>> messages) {
@@ -63,7 +63,7 @@ class QueueMessagePublisher<T> {
                     }
                     break;
                 } catch (MissingPartitionException e) {
-                    log.warn("Missing partition for butch");
+                    log.warn("Missing partition during batch request");
                     e.getOriginationTimes().forEach(ot -> queryService.createMessagePartition(messageName, ot));
                     Thread.sleep(50);
                 }

@@ -26,41 +26,33 @@ import static org.pak.messagebus.core.TestMessage.MESSAGE_NAME;
 
 @Testcontainers
 @Slf4j
-class MessageBusTest {
-    static SubscriptionName SUBSCRIPTION_NAME_1 = new SubscriptionName("test-subscription-one");
-    static SubscriptionName SUBSCRIPTION_NAME_2 = new SubscriptionName("test-subscription-two");
-    static SchemaName SCHEMA_NAME = new SchemaName("public");
-    JdbcTemplate jdbcTemplate;
-    TransactionTemplate transactionTemplate;
+class MessageBusTest extends BaseIntegrationTest {
     MessageBus messageBus;
-    ViburDBCPDataSource dataSource;
-    JsonbConverter jsonbConverter;
-    @Container
-    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>(DockerImageName.parse("postgres:15.1"));
 
     @BeforeEach
     void setUp() {
-        dataSource = new ViburDBCPDataSource();
-        dataSource.setJdbcUrl(postgres.getJdbcUrl());
-        dataSource.setPoolMaxSize(50);
-        dataSource.setUsername(postgres.getUsername());
-        dataSource.setPassword(postgres.getPassword());
-        dataSource.start();
+        var viburDBCPDataSource = new ViburDBCPDataSource();
+        viburDBCPDataSource.setJdbcUrl(postgres.getJdbcUrl());
+        viburDBCPDataSource.setPoolMaxSize(50);
+        viburDBCPDataSource.setUsername(postgres.getUsername());
+        viburDBCPDataSource.setPassword(postgres.getPassword());
+        viburDBCPDataSource.start();
 
-        jdbcTemplate = new JdbcTemplate(dataSource);
-        jsonbConverter = new JsonbConverter();
-        jsonbConverter.registerType(MESSAGE_NAME.name(), TestMessage.class);
-        transactionTemplate = new TransactionTemplate(new JdbcTransactionManager(dataSource) {});
+        dataSource = viburDBCPDataSource;
+        springTransactionService = setupSpringTransactionService(dataSource);
+        jdbcTemplate = setupJdbcTemplate(dataSource);
+        persistenceService = setupPersistenceService(jdbcTemplate);
+        jsonbConverter = setupJsonbConverter();
+        pgQueryService = setupQueryService(persistenceService, jsonbConverter);
+        tableManager = setupTableManager(pgQueryService);
+        messagePublisherFactory = setupMessagePublisherFactory(tableManager, pgQueryService);
+        messageProcessorFactory = setupMessageProcessorFactory(pgQueryService, springTransactionService);
+        queueMessagePublisherFactory = setupQueueMessagePublisherFactory(tableManager, pgQueryService, springTransactionService);
 
         messageBus = new MessageBus(
-                new PgQueryService(new SpringPersistenceService(jdbcTemplate), SCHEMA_NAME, jsonbConverter),
-                new SpringTransactionService(transactionTemplate), new StdMessageFactory(),
+                new PgQueryService(new SpringPersistenceService(jdbcTemplate), TEST_SCHEMA, jsonbConverter),
+                springTransactionService, new StdMessageFactory(),
                 CronConfig.builder().build());
-    }
-
-    @AfterEach
-    void tearDown() {
-        dataSource.close();
     }
 
     @Test

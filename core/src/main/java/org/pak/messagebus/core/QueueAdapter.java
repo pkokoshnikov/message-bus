@@ -33,11 +33,10 @@ public class QueueAdapter {
 
     public <T> void registerPublisher(PublisherConfig<T> publisherConfig) {
         messagePublishers.computeIfAbsent(publisherConfig.getClazz(),
-                k -> new QueueMessagePublisher<>(publisherConfig.getMessageName(),
-                        publisherConfig.getTraceIdExtractor(),
-                        queryService, transactionService));
-
-        tableManager.registerMessage(publisherConfig.getMessageName(), publisherConfig.getProperties().getStorageDays());
+                k -> new QueueMessagePublisher<>(publisherConfig,
+                        queryService,
+                        transactionService,
+                        tableManager));
     }
 
     public <T> void registerSubscriber(SubscriberConfig<T> subscriberConfig) {
@@ -50,9 +49,6 @@ public class QueueAdapter {
                             subscriberConfig.getSubscriptionName());
                     return starter;
                 });
-
-        tableManager.registerSubscription(subscriberConfig.getMessageName(), subscriberConfig.getSubscriptionName(),
-                subscriberConfig.getProperties().getStorageDays());
     }
 
     public <T> void publish(Class<T> clazz, List<Message<T>> messages) {

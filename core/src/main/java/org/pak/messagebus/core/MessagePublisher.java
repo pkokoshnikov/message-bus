@@ -17,18 +17,18 @@ class MessagePublisher<T> {
     private final TraceIdExtractor<T> traceIdExtractor;
     private final MessageFactory messageFactory;
 
-    MessagePublisher(
-            MessageName messageName,
-            TraceIdExtractor<T> traceIdExtractor,
+    public MessagePublisher(
+            PublisherConfig<T> publisherConfig,
             QueryService queryService,
-            MessageFactory messageFactory
+            MessageFactory messageFactory,
+            TableManager tableManager
     ) {
-        this.messageName = messageName;
+        this.messageName = publisherConfig.getMessageName();
         this.queryService = queryService;
-        this.traceIdExtractor = traceIdExtractor;
+        this.traceIdExtractor = publisherConfig.getTraceIdExtractor();
         this.messageFactory = messageFactory;
 
-        queryService.initMessageTable(messageName);
+        tableManager.registerMessage(messageName, publisherConfig.getProperties().getStorageDays());
     }
 
     public void publish(T message) {

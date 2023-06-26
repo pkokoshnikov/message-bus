@@ -4,7 +4,9 @@ package org.pak.messagebus.core;
 import eu.rekawek.toxiproxy.model.ToxicDirection;
 import lombok.NonNull;
 import lombok.extern.slf4j.Slf4j;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.pak.messagebus.core.error.RetrayablePersistenceException;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -20,10 +22,32 @@ import static java.util.Optional.of;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.pak.messagebus.core.Status.FAILED;
 import static org.pak.messagebus.core.Status.PROCESSED;
+import static org.pak.messagebus.core.TestMessage.MESSAGE_NAME;
 
 @Testcontainers
 @Slf4j
 class MessageProcessorTest extends BaseIntegrationTest {
+    @BeforeEach
+    void setup() {
+        dataSource = setupDatasource();
+        springTransactionService = setupSpringTransactionService(dataSource);
+        jdbcTemplate = setupJdbcTemplate(dataSource);
+        persistenceService = setupPersistenceService(jdbcTemplate);
+        jsonbConverter = setupJsonbConverter();
+        pgQueryService = setupQueryService(persistenceService, jsonbConverter);
+        tableManager = setupTableManager(pgQueryService);
+        messagePublisherFactory = setupMessagePublisherFactory(tableManager, pgQueryService);
+        messageProcessorFactory = setupMessageProcessorFactory(pgQueryService, springTransactionService);
+        queueMessagePublisherFactory = setupQueueMessagePublisherFactory(tableManager, pgQueryService, springTransactionService);
+
+        tableManager.registerMessage(MESSAGE_NAME, 30);
+        tableManager.registerSubscription(MESSAGE_NAME, SUBSCRIPTION_NAME_1, 30);
+    }
+
+    @AfterEach
+    void clear() {
+        clearTables(jdbcTemplate);
+    }
 
     @Test
     void testSubmitMessage() {
@@ -32,7 +56,7 @@ class MessageProcessorTest extends BaseIntegrationTest {
         var messagePublisher = messagePublisherFactory.build().create();
         messagePublisher.publish(testMessage);
 
-        var testMessageContainer = hasSize1AndGetFirst(selectTestMessages());
+        var testMessageContainer = hasSize1AndGetFirst(selectTestMessages(SUBSCRIPTION_NAME_1));
 
         assertThat(testMessageContainer.getPayload()).isEqualTo(testMessage);
         assertThat(testMessageContainer.getCreated()).isNotNull();
@@ -54,10 +78,11 @@ class MessageProcessorTest extends BaseIntegrationTest {
                 new TestMessage(TEST_VALUE + "_3"));
 
         List<Message<TestMessage>> messages = List.of(testMessage1, testMessage2, testMessage3);
+        QueueMessagePublisher<TestMessage> queueMessagePublisher = queueMessagePublisherFactory.build().create();
         queueMessagePublisher.publish(messages);
         queueMessagePublisher.publish(messages);//check duplicates
 
-        var testMessagesContainers = selectTestMessages();
+        var testMessagesContainers = selectTestMessages(SUBSCRIPTION_NAME_1);
 
         assertThat(testMessagesContainers).hasSize(3);
 
@@ -93,7 +118,7 @@ class MessageProcessorTest extends BaseIntegrationTest {
         assertThat(messageProcessor.poolAndProcess()).isTrue();
         assertThat(messageProcessor.poolAndProcess()).isFalse();
 
-        var testMessages = selectTestMessagesFromHistory();
+        var testMessages = selectTestMessagesFromHistory(SUBSCRIPTION_NAME_1);
 
         assertThat(testMessages).hasSize(2);
         assertThat(testMessages.get(0).getStatus()).isEqualTo(PROCESSED);
@@ -118,7 +143,7 @@ class MessageProcessorTest extends BaseIntegrationTest {
         messagePublisher.publish(testMessage);
         messageProcessor.poolAndProcess();
 
-        var testMessageContainer = hasSize1AndGetFirstHistory(selectTestMessagesFromHistory());
+        var testMessageContainer = hasSize1AndGetFirstHistory(selectTestMessagesFromHistory(SUBSCRIPTION_NAME_1));
 
         assertThat(testMessageContainer.getStatus()).isEqualTo(FAILED);
         assertThat(testMessageContainer.getAttempt()).isEqualTo(0);
@@ -139,11 +164,11 @@ class MessageProcessorTest extends BaseIntegrationTest {
         TestMessage testMessage = new TestMessage(TEST_VALUE);
         messagePublisher.publish(testMessage);
 
-        var testMessageBeforeHandleContainer = hasSize1AndGetFirst(selectTestMessages());
+        var testMessageBeforeHandleContainer = hasSize1AndGetFirst(selectTestMessages(SUBSCRIPTION_NAME_1));
 
         messageProcessor.poolAndProcess();
 
-        var testMessageContainer = hasSize1AndGetFirst(selectTestMessages());
+        var testMessageContainer = hasSize1AndGetFirst(selectTestMessages(SUBSCRIPTION_NAME_1));
 
         assertThat(testMessageContainer.getAttempt()).isEqualTo(1);
         assertThat(testMessageContainer.getErrorMessage()).isEqualTo(TEST_EXCEPTION_MESSAGE);
@@ -154,7 +179,7 @@ class MessageProcessorTest extends BaseIntegrationTest {
 
         messageProcessor.poolAndProcess();
 
-        testMessageContainer = hasSize1AndGetFirst(selectTestMessages());
+        testMessageContainer = hasSize1AndGetFirst(selectTestMessages(SUBSCRIPTION_NAME_1));
 
         //check that it wasn't retried before executeAfter
         assertThat(testMessageContainer.getAttempt()).isEqualTo(1);
@@ -178,12 +203,12 @@ class MessageProcessorTest extends BaseIntegrationTest {
         TestMessage testMessage = new TestMessage(TEST_VALUE);
         messagePublisher.publish(testMessage);
 
-        var testMessages = selectTestMessages();
+        var testMessages = selectTestMessages(SUBSCRIPTION_NAME_1);
         assertThat(testMessages).hasSize(1);
 
         messageProcessor.poolAndProcess();
 
-        var testMessageContainer = hasSize1AndGetFirst(selectTestMessages());
+        var testMessageContainer = hasSize1AndGetFirst(selectTestMessages(SUBSCRIPTION_NAME_1));
 
         assertThat(testMessageContainer.getAttempt()).isEqualTo(1);
         assertThat(testMessageContainer.getErrorMessage()).isEqualTo(TEST_EXCEPTION_MESSAGE);
@@ -192,7 +217,7 @@ class MessageProcessorTest extends BaseIntegrationTest {
 
         messageProcessor.poolAndProcess();
 
-        testMessageContainer = hasSize1AndGetFirst(selectTestMessages());
+        testMessageContainer = hasSize1AndGetFirst(selectTestMessages(SUBSCRIPTION_NAME_1));
 
         assertThat(testMessageContainer.getAttempt()).isEqualTo(2);
         assertThat(testMessageContainer.getErrorMessage()).isEqualTo(TEST_EXCEPTION_MESSAGE);
@@ -219,12 +244,12 @@ class MessageProcessorTest extends BaseIntegrationTest {
         TestMessage testMessage = new TestMessage(TEST_VALUE);
         messagePublisher.publish(testMessage);
 
-        var testMessages = selectTestMessages();
+        var testMessages = selectTestMessages(SUBSCRIPTION_NAME_1);
         assertThat(testMessages).hasSize(1);
 
         messageProcessor.poolAndProcess();
 
-        var testMessageContainer = hasSize1AndGetFirst(selectTestMessages());
+        var testMessageContainer = hasSize1AndGetFirst(selectTestMessages(SUBSCRIPTION_NAME_1));
 
         assertThat(testMessageContainer.getAttempt()).isEqualTo(1);
         assertThat(testMessageContainer.getErrorMessage()).isEqualTo(TEST_EXCEPTION_MESSAGE);
@@ -233,7 +258,7 @@ class MessageProcessorTest extends BaseIntegrationTest {
 
         messageProcessor.poolAndProcess();
 
-        var testMessageHistoryContainer = hasSize1AndGetFirstHistory(selectTestMessagesFromHistory());
+        var testMessageHistoryContainer = hasSize1AndGetFirstHistory(selectTestMessagesFromHistory(SUBSCRIPTION_NAME_1));
 
         assertThat(testMessageHistoryContainer.getStatus()).isEqualTo(FAILED);
         assertThat(testMessageHistoryContainer.getErrorMessage()).isEqualTo(TEST_EXCEPTION_MESSAGE);
@@ -250,7 +275,7 @@ class MessageProcessorTest extends BaseIntegrationTest {
         messagePublisher.publish(new DefaultMessage<>(key, originatedTime, testMessage));
         messagePublisher.publish(new DefaultMessage<>(key, originatedTime, testMessage));
 
-        var testMessageContainer = hasSize1AndGetFirst(selectTestMessages());
+        var testMessageContainer = hasSize1AndGetFirst(selectTestMessages(SUBSCRIPTION_NAME_1));
 
         assertThat(testMessageContainer.getPayload()).isEqualTo(testMessage);
         assertThat(testMessageContainer.getCreated()).isNotNull();
@@ -302,7 +327,7 @@ class MessageProcessorTest extends BaseIntegrationTest {
 
         messageProcessor.poolAndProcess();
 
-        var testMessageContainer = hasSize1AndGetFirst(selectTestMessages());
+        var testMessageContainer = hasSize1AndGetFirst(selectTestMessages(SUBSCRIPTION_NAME_1));
 
         assertThat(testMessageContainer.getPayload()).isEqualTo(testMessage);
         assertThat(testMessageContainer.getCreated()).isNotNull();
