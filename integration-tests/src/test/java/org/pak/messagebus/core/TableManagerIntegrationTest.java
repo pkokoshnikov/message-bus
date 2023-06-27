@@ -42,83 +42,79 @@ class TableManagerIntegrationTest extends BaseIntegrationTest {
 
     @AfterEach
     void tearDown() {
-        clearTables(jdbcTemplate);
+        clearTables();
         tableManager.stopCronJobs();
     }
 
     @Test
     void cleanMessagePartitionTest() {
-        String table = TestMessage.MESSAGE_NAME.name().replace("-", "_");
         var now = Instant.now().truncatedTo(ChronoUnit.DAYS).minus(Duration.ofDays(10));
         pgQueryService.createMessagePartition(TestMessage.MESSAGE_NAME, now);
         pgQueryService.createMessagePartition(TestMessage.MESSAGE_NAME, now.plus(Duration.ofDays(1)));
 
-        List<String> partitions = selectPartitions(table);
+        List<String> partitions = selectPartitions(MESSAGE_TABLE);
         assertThat(partitions).hasSize(4);
-        assertPartitions(table, partitions);
+        assertPartitions(MESSAGE_TABLE, partitions);
 
         var tm = new TableManager(pgQueryService, "* * * * * ?", "* * * * * ?");
         tm.registerMessage(TestMessage.MESSAGE_NAME, 2);
         tm.cleanPartitions();
 
-        partitions = selectPartitions(table);
+        partitions = selectPartitions(MESSAGE_TABLE);
         assertThat(partitions).hasSize(2);
-        assertPartitions(table, partitions);
+        assertPartitions(MESSAGE_TABLE, partitions);
 
         tm.cleanPartitions();
 
-        partitions = selectPartitions(table);
+        partitions = selectPartitions(MESSAGE_TABLE);
         assertThat(partitions).hasSize(2);
-        assertPartitions(table, partitions);
+        assertPartitions(MESSAGE_TABLE, partitions);
     }
 
     @Test
     void cleanSubscriptionPartitionTest() {
-        var historyTable = SUBSCRIPTION_NAME_1.name().replace("-", "_") + "_history";
         var now = Instant.now().truncatedTo(ChronoUnit.DAYS).minus(Duration.ofDays(10));
         pgQueryService.createHistoryPartition(SUBSCRIPTION_NAME_1, now);
         pgQueryService.createHistoryPartition(SUBSCRIPTION_NAME_1, now.plus(Duration.ofDays(1)));
 
-        List<String> partitions = selectPartitions(historyTable);
+        List<String> partitions = selectPartitions(SUBSCRIPTION_TABLE_1_HISTORY);
         assertThat(partitions).hasSize(4);
-        assertPartitions(historyTable, partitions);
+        assertPartitions(SUBSCRIPTION_TABLE_1_HISTORY, partitions);
 
         var tm = new TableManager(pgQueryService, "* * * * * ?", "* * * * * ?");
         tm.registerSubscription(TestMessage.MESSAGE_NAME, SUBSCRIPTION_NAME_1, 2);
         tm.cleanPartitions();
 
-        partitions = selectPartitions(historyTable);
+        partitions = selectPartitions(SUBSCRIPTION_TABLE_1_HISTORY);
         assertThat(partitions).hasSize(2);
-        assertPartitions(historyTable, partitions);
+        assertPartitions(SUBSCRIPTION_TABLE_1_HISTORY, partitions);
 
         tm.cleanPartitions();
 
-        partitions = selectPartitions(historyTable);
+        partitions = selectPartitions(SUBSCRIPTION_TABLE_1_HISTORY);
         assertThat(partitions).hasSize(2);
-        assertPartitions(historyTable, partitions);
+        assertPartitions(SUBSCRIPTION_TABLE_1_HISTORY, partitions);
     }
 
     @Test
     void testCreateMessagePartitions() {
-        String table = TestMessage.MESSAGE_NAME.name().replace("-", "_");
         tableManager.registerMessage(TestMessage.MESSAGE_NAME, 1);
 
-        List<String> partitions = selectPartitions(table);
+        List<String> partitions = selectPartitions(MESSAGE_TABLE);
 
         assertThat(partitions).hasSize(2);
-        assertPartitions(table, partitions);
+        assertPartitions(MESSAGE_TABLE, partitions);
     }
 
     @Test
     void testCreateSubscriptionPartitions() {
-        var historyTable = SUBSCRIPTION_NAME_1.name().replace("-", "_") + "_history";
         tableManager.registerSubscription(TestMessage.MESSAGE_NAME, SUBSCRIPTION_NAME_1, 1);
 
-        List<String> partitions = selectPartitions(historyTable);
+        List<String> partitions = selectPartitions(SUBSCRIPTION_TABLE_1_HISTORY);
 
         assertThat(partitions).hasSize(2);
 
-        assertPartitions(historyTable, partitions);
+        assertPartitions(SUBSCRIPTION_TABLE_1_HISTORY, partitions);
     }
 
     @Test
@@ -136,27 +132,5 @@ class TableManagerIntegrationTest extends BaseIntegrationTest {
         corruptedTableManager.registerMessage(TestMessage.MESSAGE_NAME, 1);
         var exception = Assertions.assertThrows(RuntimeException.class, corruptedTableManager::startCronJobs);
         assertThat(exception.getMessage()).isEqualTo("CronExpression '* * * * ?' is invalid.");
-    }
-
-    private void assertPartitions(String tableName, List<String> partitions) {
-        var params = Map.of("table", tableName);
-        partitions.forEach(partition -> {
-            var matches = Pattern.compile(formatter.execute("${table}_\\d{4}_\\d{2}_\\d{2}", params))
-                    .matcher(partition)
-                    .matches();
-            assertThat(matches).isTrue();
-        });
-    }
-
-    @NotNull
-    private List<String> selectPartitions(String tableName) {
-        Map<String, String> formatParams = Map.of("schema", TEST_SCHEMA.value(),
-                "table", tableName);
-        var query = formatter.execute("""
-                        SELECT inhrelid::regclass AS partition
-                        FROM   pg_catalog.pg_inherits
-                        WHERE  inhparent = '${schema}.${table}'::regclass;""",
-                formatParams);
-        return jdbcTemplate.query(query, (rs, rowNum) -> rs.getString("partition"));
     }
 }

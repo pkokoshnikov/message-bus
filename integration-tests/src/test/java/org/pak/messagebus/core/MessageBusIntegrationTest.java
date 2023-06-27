@@ -1,21 +1,12 @@
 package org.pak.messagebus.core;
 
 import lombok.extern.slf4j.Slf4j;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.pak.messagebus.pg.PgQueryService;
-import org.pak.messagebus.pg.jsonb.JsonbConverter;
 import org.pak.messagebus.spring.SpringPersistenceService;
-import org.pak.messagebus.spring.SpringTransactionService;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.support.JdbcTransactionManager;
-import org.springframework.transaction.support.TransactionTemplate;
-import org.testcontainers.containers.PostgreSQLContainer;
-import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
-import org.testcontainers.utility.DockerImageName;
 import org.vibur.dbcp.ViburDBCPDataSource;
 
 import java.util.concurrent.CountDownLatch;
@@ -26,7 +17,7 @@ import static org.pak.messagebus.core.TestMessage.MESSAGE_NAME;
 
 @Testcontainers
 @Slf4j
-class MessageBusTest extends BaseIntegrationTest {
+class MessageBusIntegrationTest extends BaseIntegrationTest {
     MessageBus messageBus;
 
     @BeforeEach

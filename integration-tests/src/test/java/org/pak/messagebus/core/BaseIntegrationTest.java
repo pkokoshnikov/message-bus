@@ -24,13 +24,20 @@ import java.math.BigInteger;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 import static java.util.Optional.ofNullable;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.pak.messagebus.core.TestMessage.MESSAGE_NAME;
 
 public class BaseIntegrationTest {
+    static final String MESSAGE_TABLE = MESSAGE_NAME.name().replace("-", "_");
     static SubscriptionName SUBSCRIPTION_NAME_1 = new SubscriptionName("test-subscription-one");
+    static String SUBSCRIPTION_TABLE_1 = SUBSCRIPTION_NAME_1.name().replace("-", "_");
+    static String SUBSCRIPTION_TABLE_1_HISTORY = SUBSCRIPTION_NAME_1.name().replace("-", "_") + "_history";
     static SubscriptionName SUBSCRIPTION_NAME_2 = new SubscriptionName("test-subscription-two");
+    static String SUBSCRIPTION_TABLE_2 = SUBSCRIPTION_NAME_2.name().replace("-", "_");
+    static String SUBSCRIPTION_TABLE_2_HISTORY = SUBSCRIPTION_NAME_2.name().replace("-", "_") + "_history";
     static SchemaName TEST_SCHEMA = new SchemaName("public");
     static String TEST_VALUE = "test-value";
     static String TEST_EXCEPTION_MESSAGE = "test-exception-payload";
@@ -93,7 +100,7 @@ public class BaseIntegrationTest {
 
     static JsonbConverter setupJsonbConverter() {
         var jsonbConverter = new JsonbConverter();
-        jsonbConverter.registerType(TestMessage.MESSAGE_NAME.name(), TestMessage.class);
+        jsonbConverter.registerType(MESSAGE_NAME.name(), TestMessage.class);
         return jsonbConverter;
     }
 
@@ -106,7 +113,7 @@ public class BaseIntegrationTest {
                         .properties(PublisherConfig.Properties.builder()
                                 .storageDays(30)
                                 .build())
-                        .messageName(TestMessage.MESSAGE_NAME)
+                        .messageName(MESSAGE_NAME)
                         .clazz(TestMessage.class)
                         .traceIdExtractor(new NullTraceIdExtractor<>())
                         .build())
@@ -125,7 +132,7 @@ public class BaseIntegrationTest {
                         .properties(PublisherConfig.Properties.builder()
                                 .storageDays(30)
                                 .build())
-                        .messageName(TestMessage.MESSAGE_NAME)
+                        .messageName(MESSAGE_NAME)
                         .clazz(TestMessage.class)
                         .traceIdExtractor(new NullTraceIdExtractor<>())
                         .build())
@@ -147,7 +154,7 @@ public class BaseIntegrationTest {
                 .retryablePolicy(new StdRetryablePolicy())
                 .blockingPolicy(new StdBlockingPolicy())
                 .nonRetryablePolicy(new StdNonRetryablePolicy())
-                .messageName(TestMessage.MESSAGE_NAME)
+                .messageName(MESSAGE_NAME)
                 .subscriptionName(SUBSCRIPTION_NAME_1)
                 .traceIdExtractor(object -> null)
                 .properties(SubscriberConfig.Properties.builder().build());
@@ -157,26 +164,26 @@ public class BaseIntegrationTest {
         return new TableManager(pgQueryService, "* * * * * ?", "* * * * * ?");
     }
 
-    static void clearTables(JdbcTemplate jdbcTemplate) {
+    void clearTables() {
         jdbcTemplate.update(formatter.execute("DROP TABLE IF EXISTS ${schema}.${subscriptionTable}",
                 Map.of("schema", TEST_SCHEMA.value(),
-                        "subscriptionTable", "test_subscription_one")));
+                        "subscriptionTable", SUBSCRIPTION_TABLE_1)));
 
         jdbcTemplate.update(formatter.execute("DROP TABLE IF EXISTS ${schema}.${subscriptionTable}_history",
                 Map.of("schema", TEST_SCHEMA.value(),
-                        "subscriptionTable", "test_subscription_one")));
+                        "subscriptionTable", SUBSCRIPTION_TABLE_1)));
 
         jdbcTemplate.update(formatter.execute("DROP TABLE IF EXISTS ${schema}.${subscriptionTable}",
                 Map.of("schema", TEST_SCHEMA.value(),
-                        "subscriptionTable", "test_subscription_two")));
+                        "subscriptionTable", SUBSCRIPTION_TABLE_2)));
 
         jdbcTemplate.update(formatter.execute("DROP TABLE IF EXISTS ${schema}.${subscriptionTable}_history",
                 Map.of("schema", TEST_SCHEMA.value(),
-                        "subscriptionTable", "test_subscription_two")));
+                        "subscriptionTable", SUBSCRIPTION_TABLE_2)));
 
         jdbcTemplate.update(formatter.execute("DROP TABLE IF EXISTS ${schema}.${messageTable}",
                 Map.of("schema", TEST_SCHEMA.value(),
-                        "messageTable", "test_message")));
+                        "messageTable", MESSAGE_TABLE)));
     }
 
     static MessageContainer<TestMessage> hasSize1AndGetFirst(List<MessageContainer<TestMessage>> testMessageContainers) {
@@ -236,6 +243,28 @@ public class BaseIntegrationTest {
                         rs.getString("error_message"),
                         rs.getString("stack_trace")));
     }
+
+    void assertPartitions(String tableName, List<String> partitions) {
+        var params = Map.of("table", tableName);
+        partitions.forEach(partition -> {
+            var matches = Pattern.compile(formatter.execute("${table}_\\d{4}_\\d{2}_\\d{2}", params))
+                    .matcher(partition)
+                    .matches();
+            assertThat(matches).isTrue();
+        });
+    }
+
+    List<String> selectPartitions(String tableName) {
+        Map<String, String> formatParams = Map.of("schema", TEST_SCHEMA.value(),
+                "table", tableName);
+        var query = formatter.execute("""
+                        SELECT inhrelid::regclass AS partition
+                        FROM   pg_catalog.pg_inherits
+                        WHERE  inhparent = '${schema}.${table}'::regclass;""",
+                formatParams);
+        return jdbcTemplate.query(query, (rs, rowNum) -> rs.getString("partition"));
+    }
+
 
     static class BlockingApplicationException extends RuntimeException {
         public BlockingApplicationException(String message) {

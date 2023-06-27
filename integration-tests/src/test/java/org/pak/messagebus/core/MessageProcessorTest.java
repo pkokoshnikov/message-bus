@@ -46,7 +46,7 @@ class MessageProcessorTest extends BaseIntegrationTest {
 
     @AfterEach
     void clear() {
-        clearTables(jdbcTemplate);
+        clearTables();
     }
 
     @Test
@@ -70,11 +70,11 @@ class MessageProcessorTest extends BaseIntegrationTest {
 
     @Test
     void testSubmitBatchMessages() {
-        var testMessage1 = new DefaultMessage<>(UUID.randomUUID().toString(), Instant.now(),
+        var testMessage1 = new StdMessage<>(UUID.randomUUID().toString(), Instant.now(),
                 new TestMessage(TEST_VALUE + "_1"));
-        var testMessage2 = new DefaultMessage<>(UUID.randomUUID().toString(), Instant.now(),
+        var testMessage2 = new StdMessage<>(UUID.randomUUID().toString(), Instant.now(),
                 new TestMessage(TEST_VALUE + "_2"));
-        var testMessage3 = new DefaultMessage<>(UUID.randomUUID().toString(), Instant.now(),
+        var testMessage3 = new StdMessage<>(UUID.randomUUID().toString(), Instant.now(),
                 new TestMessage(TEST_VALUE + "_3"));
 
         List<Message<TestMessage>> messages = List.of(testMessage1, testMessage2, testMessage3);
@@ -272,8 +272,8 @@ class MessageProcessorTest extends BaseIntegrationTest {
         TestMessage testMessage = new TestMessage(TEST_VALUE);
         var key = UUID.randomUUID().toString();
         var originatedTime = Instant.now();
-        messagePublisher.publish(new DefaultMessage<>(key, originatedTime, testMessage));
-        messagePublisher.publish(new DefaultMessage<>(key, originatedTime, testMessage));
+        messagePublisher.publish(new StdMessage<>(key, originatedTime, testMessage));
+        messagePublisher.publish(new StdMessage<>(key, originatedTime, testMessage));
 
         var testMessageContainer = hasSize1AndGetFirst(selectTestMessages(SUBSCRIPTION_NAME_1));
 
