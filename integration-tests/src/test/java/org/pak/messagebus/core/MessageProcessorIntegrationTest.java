@@ -26,7 +26,7 @@ import static org.pak.messagebus.core.TestMessage.MESSAGE_NAME;
 
 @Testcontainers
 @Slf4j
-class MessageProcessorTest extends BaseIntegrationTest {
+class MessageProcessorIntegrationTest extends BaseIntegrationTest {
     @BeforeEach
     void setup() {
         dataSource = setupDatasource();
@@ -287,7 +287,19 @@ class MessageProcessorTest extends BaseIntegrationTest {
     }
 
     @Test
-    void testTimeoutException() throws IOException {
+    void testPublishTimeoutException() throws IOException {
+        var messagePublisher = messagePublisherFactory.build().create();
+
+        TestMessage testMessage = new TestMessage(TEST_VALUE);
+        var timeout = postgresqlProxy.toxics().timeout("pg-timeout", ToxicDirection.DOWNSTREAM, 1000);
+
+        Assertions.assertThrows(RetrayablePersistenceException.class, () -> messagePublisher.publish(testMessage));
+
+        timeout.remove();
+    }
+
+    @Test
+    void testProcessTimeoutException() throws IOException {
         var messagePublisher = messagePublisherFactory.build().create();
 
         var messageProcessor = messageProcessorFactory.build().create();

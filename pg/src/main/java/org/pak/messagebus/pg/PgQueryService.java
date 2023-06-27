@@ -29,6 +29,7 @@ import static java.util.Optional.ofNullable;
 public class PgQueryService implements QueryService {
     private static final DateTimeFormatter dateFormatter = DateTimeFormatter.ofPattern("yyyy_MM_dd");
     private static final String MISSING_PARTITION_CODE = "23514";
+    private static final String PARTITION_HAS_REFERENCES_CODE = "23503";
     private final PersistenceService persistenceService;
     private final SchemaName schemaName;
     private final JsonbConverter jsonbConverter;
@@ -155,7 +156,7 @@ public class PgQueryService implements QueryService {
             persistenceService.execute(query);
         } catch (PersistenceException e) {
             if (PSQLException.class.isAssignableFrom(e.getOriginalCause().getClass()) &&
-                    ((PSQLException) e.getOriginalCause()).getSQLState().equals("23503")) {
+                    ((PSQLException) e.getOriginalCause()).getSQLState().equals(PARTITION_HAS_REFERENCES_CODE)) {
                 throw new PartitionHasReferencesException();
             } else {
                 throw e;

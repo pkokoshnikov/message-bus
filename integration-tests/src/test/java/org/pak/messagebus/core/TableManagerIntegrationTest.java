@@ -2,22 +2,16 @@ package org.pak.messagebus.core;
 
 
 import lombok.extern.slf4j.Slf4j;
-import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.pak.messagebus.pg.PgQueryService;
-import org.pak.messagebus.spring.SpringPersistenceService;
 import org.testcontainers.junit.jupiter.Testcontainers;
-import org.vibur.dbcp.ViburDBCPDataSource;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
-import java.util.Map;
-import java.util.regex.Pattern;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.pak.messagebus.core.TestMessage.MESSAGE_NAME;

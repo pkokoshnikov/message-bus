@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.pak.messagebus.core.error.MissingPartitionException;
+import org.pak.messagebus.core.error.PartitionHasReferencesException;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.time.Duration;
@@ -66,6 +67,32 @@ public class PgQueryServiceIntegrationTest extends BaseIntegrationTest {
 
         partitions = pgQueryService.getAllPartitions(MESSAGE_NAME);
         assertThat(partitions).hasSize(0);
+    }
+
+    @Test
+    void dropMessagePartitionHasReferencesException() {
+        pgQueryService.initMessageTable(MESSAGE_NAME);
+        pgQueryService.initSubscriptionTable(MESSAGE_NAME, SUBSCRIPTION_NAME_1);
+        Instant originatedTime = Instant.now();
+        pgQueryService.createMessagePartition(MESSAGE_NAME, originatedTime);
+        pgQueryService.createHistoryPartition(SUBSCRIPTION_NAME_1, originatedTime);
+
+        pgQueryService.insertMessage(MESSAGE_NAME,
+                new StdMessage<>(UUID.randomUUID().toString(), originatedTime, new TestMessage("test")));
+
+        var partitions = pgQueryService.getAllPartitions(MESSAGE_NAME);
+        Assertions.assertThrows(PartitionHasReferencesException.class,
+                () -> pgQueryService.dropMessagePartition(MESSAGE_NAME, partitions.get(0)));
+
+        var messages = pgQueryService.selectMessages(MESSAGE_NAME, SUBSCRIPTION_NAME_1, 1);
+        pgQueryService.completeMessage(SUBSCRIPTION_NAME_1, messages.get(0));
+
+        Assertions.assertThrows(PartitionHasReferencesException.class,
+                () -> pgQueryService.dropMessagePartition(MESSAGE_NAME, partitions.get(0)));
+
+        pgQueryService.dropHistoryPartition(SUBSCRIPTION_NAME_1,
+                partitions.get(0)); // history partition should be dropped first of all
+        pgQueryService.dropMessagePartition(MESSAGE_NAME, partitions.get(0));
     }
 
     @Test
