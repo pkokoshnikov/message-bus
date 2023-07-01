@@ -17,9 +17,15 @@ domain events. But of course it can be used as a queue on your db.
 First of all you need to initialize the message bus, it should be one instance per application. It can be a singleton bean in Spring.
 ```java
     //init message bus
+    PersistenceService persistenceService = new SpringPersistenceService(jdbcTemplate);
+    QueryService queryService = new PgQueryService(persistenceService, "schema", jsonbConverter);
+    TransactionService transactionService = new SpringTransactionService(new TransactionTemplate(new JdbcTransactionManager(dataSource) {}));
+    CronConfig cronConfig = CronConfig.builder().build()
     MessageBus messageBus = new MessageBus(
-        new PgQueryService(new SpringPersistenceService(jdbcTemplate), "schema", jsonbConverter),
-        springTransactionService, new StdMessageFactory(), CronConfig.builder().build());
+            queryService,
+            transactionService, 
+            new StdMessageFactory(),
+            cronConfig);
 ```
 ### Publishing 
 #### Registration
@@ -48,13 +54,13 @@ The most important property is listener where should be placed your business log
 ```java
     //register subscriber
     messageBus.registerSubscriber(SubscriberConfig.<TestMessage>builder()
-        .messageListener(message -> {
+        .messageListener(message -> { // your business logic
             System.out.println("Message received: " + message);
         })
-        .messageName(MESSAGE_NAME)
-        .subscriptionName(SUBSCRIPTION_NAME)
+        .messageName(MESSAGE_NAME) // unique identifier of message type
+        .subscriptionName(SUBSCRIPTION_NAME) // unique identifier of subscription group
         .properties(SubscriberConfig.Properties.builder()
-            .concurrency(10)
+            .concurrency(10) // number of threads for consuming messages
             .build())
         .build());
 ```
@@ -67,7 +73,7 @@ To start consuming messages you need to call startSubscribers method.
 #### Stopping
 To stop consuming messages you need to call stopSubscribers method.
 ```java
-    //start subscribers
+    //stop subscribers
     messageBus.stopSubscribers();
 ```
 
