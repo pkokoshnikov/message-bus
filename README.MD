@@ -20,7 +20,7 @@ First of all you need to initialize the message bus, it should be one instance p
     PersistenceService persistenceService = new SpringPersistenceService(jdbcTemplate);
     QueryService queryService = new PgQueryService(persistenceService, "schema", jsonbConverter);
     TransactionService transactionService = new SpringTransactionService(new TransactionTemplate(new JdbcTransactionManager(dataSource) {}));
-    CronConfig cronConfig = CronConfig.builder().build()
+    CronConfig cronConfig = CronConfig.builder().build();
     MessageBus messageBus = new MessageBus(
             queryService,
             transactionService, 
