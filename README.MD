@@ -1,8 +1,8 @@
 # Message bus
 
 ## Description
-This library is intended for supporting of outbox pattern in general. And it can be used for publishing/subscribing of 
-domain events. But of course it can be used as a queue on your db.
+This library is intended for supporting of **Outbox pattern** in general. And it can be used for publishing/subscribing of 
+domain events in eventual consistency manner. But of course it can be used as a simple queue on your db.
 
 ### The library supports:
 * publishing messages (single and batch)
@@ -65,13 +65,13 @@ The most important property is listener where should be placed your business log
         .build());
 ```
 #### Starting
-To start consuming messages you need to call startSubscribers method.
+To start consuming messages you need to call `startSubscribers` method.
 ```java
     //start subscribers
     messageBus.startSubscribers();
 ```
 #### Stopping
-To stop consuming messages you need to call stopSubscribers method.
+To stop consuming messages you need to call `stopSubscribers` method.
 ```java
     //stop subscribers
     messageBus.stopSubscribers();
@@ -80,27 +80,58 @@ To stop consuming messages you need to call stopSubscribers method.
 ## Abstraction layers:
 The library support abstraction layers for:
 * database queries layer - it can be used with any database that supports SQL that support select for update skip locked,
-  default impl is for PostgreSQL
+  default impl is for `PostgreSQL`
 * persistence layer - it can be used with any frameworks that supports jdbc operations, default impl is for Spring
 
-## Outbox 
+## Outbox Pattern
 ### Publishing
 You should always publish your messages(events) in the same transaction with your business logic. Only in this case you can be 
-sure that your message will be published correctly.
+sure that your message will be published consensually with main logic.
 ### Subscribing
-Messages are consumed and processed in the same transaction. It gives you guarantee that your business logic changes will be 
-committed with correct message subscription status(PROCESSED or FAILED). Be careful with maxPollRecords property, transaction is started 
-on all messages that are polled from db. And if you have message listener with high running time you can face with long 
-transactions. Please don't change maxPollRecords, it is equaled 1 by default, if you don't have high load on your system.
+When subscriber process message, it starts transaction and you are not necessary to start new transaction. It gives you guarantee 
+that your business logic changes will be committed with correct message subscription status(`PROCESSED` or `FAILED`).
+### Message brokers
+If your application has two or more services, you can use message brokers to move events from one service to another. 
+To achieve this, you should use a `QueueAdapter`. It provides the possibility to move messages in batches from a database 
+(DB) to a message broker (MB), and then from the MB back to the DB. Each message has a unique key that is set 
+when the message is stored in the DB. When sending messages via the MB, you don't need to worry about duplicate messages, 
+as any duplicates will be skipped during saving messages from MB to DB. However, it is important to receive confirmation 
+from the MB that the messages have been successfully saved during sending messages the MB from DB. And you should acknowledge messages 
+only when they have been safely stored in the DB during saving messages from MB to DB. Only in this case you can ensure the 
+messages are handled safely. Please note that there may be further context or specific requirements depending on 
+the technology or framework you are using. The above information is based on the general principles of using message 
+brokers for event-driven architectures.
+
+## Subscriber properties 
+### maxPollRecords
+Please be cautious when configuring the maxPollRecords property, as a transaction is initiated for all messages polled 
+from the database in batch. If you have a message listener with a long running time, this can lead to extended transaction durations. 
+It is advisable not to change the `maxPollRecords` value unless you are certain it is necessary for your specific case.
+A large `maxPollRecords` value can be useful when moving messages from DB to MB. However, it's important to consider the 
+impact on transaction duration and overall system performance before adjusting this value.
+It's always recommended to evaluate your specific use case and consider the potential implications before making any 
+changes to the `maxPollRecords` property or any other configuration settings related to message processing.
+### concurrency
+The `concurrency` property sets the number of message handlers that work simultaneously. If you don't have a high load, 
+it is not necessary to change it.
+### storageDays
+The storageDays property sets the maximum number of days to retain event data. However, it does not guarantee that 
+partitions will be deleted exactly after the specified date. If there are unprocessed messages in a partition, they will 
+not be deleted.
+### persistenceExceptionPause
+The `persistenceExceptionPause` sets the pause duration if a persistence exception occurs. This pause allows for resolving 
+the persistence issue before resuming normal operations.
+### unpredictedExceptionPause
+The same for unpredicted exception.
 
 ## Retry
-During processing of message you can throw exception, in this case message subscription will be marked as FAILED or retried. 
+During processing of message you can throw exception, in this case message subscription will be marked as `FAILED` or retried. 
 You can configure retryable policy, blocking policy, and non retrayble policy for each subscriber. Please see SubscriberConfig.
 ### Retryable policy
-It consumes Exception and attempt and returns duration. Please see StdRetryablePolicy for details. All your exceptions 
-by default is retryable. If you want to mark some exceptions as non retryable you should use NonRetryablePolicy.
+It consumes Exception and attempt and returns duration. Please see `StdRetryablePolicy` for details. All your exceptions 
+by default is retryable. If you want to mark some exceptions as non retryable you should use `NonRetryablePolicy`.
 ### Non retryable policy
-It consumes Exception and returns boolean. If it returns true message will be marked as FAILED at once.
+It consumes Exception and returns boolean. If it returns true message will be marked as `FAILED` at once.
 ### Blocking policy
 It consumes attempt and returns duration. You can use it for blocking message processing in case of unavailable your 
 resources. In this case message will be retried after duration and attempt will not be incremented.
